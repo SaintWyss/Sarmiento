@@ -1,4 +1,4 @@
-# RemoteDesk *(nombre placeholder)*
+# Sarmiento
 
 AnyDesk propio para manejar los PCs propios y cualquier máquina futura. Control remoto
 **pantalla + mouse/teclado**.

@@ -1,7 +1,7 @@
-# RemoteDesk — Control-Plane hexagonal sobre RustDesk (v2)
+# Sarmiento — Control-Plane hexagonal sobre RustDesk (v2)
 
 > Diseño validado. Fecha: 2026-07-12. Estado: aprobado. v2 incorpora hallazgo Fase 0.
-> Nombre del proyecto: **pendiente** (placeholder `remotedesk`).
+> Repo: https://github.com/SaintWyss/Sarmiento
 
 ## Objetivo
 
@@ -129,4 +129,4 @@ RustDesk AGPL: se corre sin modificar ni distribuir → sin obligaciones extra p
 
 ## Decisiones abiertas
 
-- **Nombre del proyecto:** pendiente (renombrar dir `remotedesk`).
+- ~~Nombre del proyecto~~ → **Sarmiento** (repo SaintWyss/Sarmiento).
