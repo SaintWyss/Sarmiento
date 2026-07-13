@@ -37,6 +37,17 @@ export PATH="$bin_dir:$PATH"
 export CALLS="$calls"
 export XDG_RUNTIME_DIR="$test_dir/runtime"
 
+wait_for_call() {
+  local expected="$1"
+  local attempt
+  for attempt in {1..40}; do
+    grep -Fxq "$expected" "$calls" && return 0
+    sleep 0.025
+  done
+  echo "timed out waiting for: $expected" >&2
+  return 1
+}
+
 if bash viewer/sarmiento-open.sh 'https://invalid.example' 2>/dev/null; then
   echo "invalid URI unexpectedly succeeded" >&2
   exit 1
@@ -45,16 +56,16 @@ else
 fi
 
 bash viewer/sarmiento-open.sh 'sarmiento://connect/123456789'
-grep -Fx 'rustdesk --connect 123456789' "$calls"
+wait_for_call 'rustdesk --connect 123456789'
 
 : > "$calls"
 bash viewer/sarmiento-workstation.sh notebook 123456789
-grep -Fx 'systemctl --user stop deskflow-server.service' "$calls"
-grep -Fx 'rustdesk --connect 123456789' "$calls"
+wait_for_call 'systemctl --user stop deskflow-server.service'
+wait_for_call 'rustdesk --connect 123456789'
 
 : > "$calls"
 bash viewer/sarmiento-workstation.sh normal
-grep -Fx 'systemctl --user start deskflow-server.service' "$calls"
+wait_for_call 'systemctl --user start deskflow-server.service'
 
 status="$(bash viewer/sarmiento-workstation.sh status)"
 grep -Fx 'mode=integrated' <<<"$status"
