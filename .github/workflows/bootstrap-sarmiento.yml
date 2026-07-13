@@ -4,12 +4,17 @@ on:
   push:
     branches:
       - agent/sarmiento-1.0
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   unpack:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Check out delivery branch
