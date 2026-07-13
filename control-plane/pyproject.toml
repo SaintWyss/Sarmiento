@@ -12,7 +12,7 @@ dependencies = [
   "pydantic-settings>=2.5,<3",
   "PyJWT>=2.9,<3",
   "alembic>=1.14,<2",
-  "cryptography>=48.0.1,<49",
+  "cryptography>=48.0.1,<50",
 ]
 
 [project.optional-dependencies]
