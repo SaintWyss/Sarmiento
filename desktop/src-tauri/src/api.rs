@@ -291,13 +291,17 @@ pub async fn enable_mfa(
     code: String,
 ) -> Result<Value, String> {
     let session = active_session(&state).await?;
-    request(
+    let result = request(
         &session,
         Method::POST,
         "auth/mfa/enable",
         Some(json!({ "secret": secret, "code": code })),
     )
-    .await
+    .await;
+    if result.is_ok() {
+        *state.session.lock().await = None;
+    }
+    result
 }
 
 #[tauri::command]
