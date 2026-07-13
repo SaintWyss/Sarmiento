@@ -1,5 +1,6 @@
-const state = { devices: [], config: null, owner: null, currentTab: 'linux' };
+const state = { devices: [], config: null, owner: null, currentTab: 'linux', workstationDevice: null };
 const $ = id => document.getElementById(id);
+const workstationCapable = /Linux/i.test(navigator.userAgent) && !/Android/i.test(navigator.userAgent);
 
 function readCookie(...names) {
   for (const name of names) {
@@ -66,6 +67,7 @@ function showLogin() {
 function showApp() {
   $('loginView').classList.add('hidden');
   $('appView').classList.remove('hidden');
+  document.querySelector('.workstation-panel')?.classList.toggle('hidden', !workstationCapable);
 }
 
 async function bootstrap() {
@@ -162,18 +164,40 @@ function deviceCard(device) {
   const connect = document.createElement('a');
   connect.className = 'connect';
   connect.href = device.connect_uri;
-  connect.textContent = 'Conectar';
+  connect.textContent = 'Control remoto';
   connect.addEventListener('click', () => {
     navigator.clipboard?.writeText(device.rustdesk_id).catch(() => {});
     setTimeout(() => toast(`ID ${device.rustdesk_id} copiado como respaldo`), 700);
   });
+  const workstation = document.createElement('button');
+  workstation.className = 'workstation-connect';
+  workstation.textContent = 'Abrir en monitor';
+  workstation.disabled = !device.online;
+  workstation.title = device.online
+    ? 'Abrir este equipo con RustDesk y pausar Deskflow'
+    : 'El equipo está fuera de línea';
+  workstation.hidden = !workstationCapable;
+  workstation.onclick = () => openWorkstation(device);
   const manage = document.createElement('button');
   manage.className = 'manage';
   manage.textContent = 'Administrar';
   manage.onclick = () => openEdit(device);
-  actions.append(connect, manage);
+  actions.append(connect, workstation, manage);
   card.append(header, name, id, meta, actions);
   return card;
+}
+
+function openWorkstation(device) {
+  state.workstationDevice = device;
+  $('workstationDeviceName').textContent = device.alias;
+  $('workstationPreviewName').textContent = device.alias;
+  $('confirmWorkstationButton').href =
+    `sarmiento://workstation/notebook/${encodeURIComponent(device.rustdesk_id)}`;
+  $('workstationDialog').showModal();
+}
+
+function schemeFeedback(message) {
+  setTimeout(() => toast(message), 500);
 }
 
 async function loadAudit() {
@@ -263,6 +287,16 @@ $('viewerButton').onclick = () => {
   $('viewerMacCommand').textContent = `curl -fsSL ${base}/viewer/install-macos.sh | bash`;
   $('viewerDialog').showModal();
 };
+
+$('normalModeButton').addEventListener('click', () => {
+  schemeFeedback('Solicitando modo de pantallas físicas');
+});
+$('workstationHelpButton').onclick = () => $('workstationHelpDialog').showModal();
+$('confirmWorkstationButton').addEventListener('click', () => {
+  $('workstationDialog').close();
+  const name = state.workstationDevice?.alias || 'el equipo';
+  schemeFeedback(`Abriendo ${name} en este monitor`);
+});
 
 $('passwordButton').onclick = openSecurity;
 
