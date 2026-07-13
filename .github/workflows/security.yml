@@ -22,13 +22,22 @@ jobs:
           cache-dependency-path: control-plane/pyproject.toml
       - name: Install scanners
         run: python -m pip install --quiet pip-audit bandit
-      - name: Dependency audit
+      - name: Generate dependency audit
         shell: bash
         run: |
           set +e
-          pip-audit ./control-plane --format json --output /tmp/pip-audit.json
-          status=$?
-          cat /tmp/pip-audit.json
-          exit $status
+          pip-audit ./control-plane --format json --output pip-audit.json
+          echo $? > pip-audit.status
+          exit 0
+      - name: Upload dependency audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-report
+          path: pip-audit.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Enforce dependency audit
+        run: test "$(cat pip-audit.status)" = "0"
       - name: Static security scan
         run: bandit -q -r control-plane/src agent/sarmiento_agent.py ops/init_env.py -ll
