@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -10,7 +11,20 @@ from sqlalchemy.orm import Session
 from .config import Settings
 from .domain import DevicePresence, EnrollmentWindow
 from .models import AuditEvent, Device, EnrollmentToken, Owner
-from .security import derive_token, generate_token, hash_password, hash_token, verify_password
+from .security import (
+    decrypt_secret,
+    derive_token,
+    encrypt_secret,
+    generate_recovery_codes,
+    generate_token,
+    generate_totp_secret,
+    hash_password,
+    hash_recovery_code,
+    hash_token,
+    totp_provisioning_uri,
+    verify_password,
+    verify_totp,
+)
 
 
 class DomainError(Exception):
@@ -45,6 +59,10 @@ def bootstrap_owner(session: Session, settings: Settings) -> Owner:
     existing = session.scalar(select(Owner).where(Owner.username == settings.owner_username))
     if existing:
         return existing
+    if settings.environment.lower() == "production" and (
+        not settings.owner_password or settings.owner_password == "change-me-now"
+    ):
+        raise RuntimeError("Set SARMIENTO_OWNER_PASSWORD for the first production bootstrap")
     owner = Owner(
         username=settings.owner_username,
         password_hash=hash_password(settings.owner_password),
@@ -77,6 +95,217 @@ def audit(
     )
     session.add(event)
     return event
+
+
+def owner_mfa_enabled(owner: Owner) -> bool:
+    return bool(owner.mfa_enabled_at and owner.mfa_secret_encrypted)
+
+
+def login_lock_remaining(owner: Owner, now: datetime | None = None) -> int:
+    moment = now or datetime.now(UTC)
+    locked_until = aware(owner.locked_until)
+    if not locked_until or locked_until <= moment:
+        return 0
+    return max(1, int((locked_until - moment).total_seconds()))
+
+
+def register_login_failure(
+    session: Session,
+    *,
+    owner: Owner,
+    settings: Settings,
+    source_ip: str | None,
+    reason: str,
+    now: datetime | None = None,
+) -> None:
+    moment = now or datetime.now(UTC)
+    remaining = login_lock_remaining(owner, moment)
+    if remaining:
+        audit(
+            session,
+            actor_type="anonymous",
+            actor_id=None,
+            action="auth.login_blocked",
+            target_type="owner",
+            target_id=owner.id,
+            source_ip=source_ip,
+        )
+        session.commit()
+        return
+    if owner.locked_until:
+        owner.locked_until = None
+        owner.failed_login_count = 0
+    owner.failed_login_count += 1
+    if owner.failed_login_count >= settings.login_lockout_attempts:
+        owner.locked_until = moment + timedelta(minutes=settings.login_lockout_minutes)
+    audit(
+        session,
+        actor_type="anonymous",
+        actor_id=None,
+        action="auth.login_failed",
+        target_type="owner",
+        target_id=owner.id,
+        source_ip=source_ip,
+        details={"username": owner.username, "reason": reason},
+    )
+    session.commit()
+
+
+def register_login_success(
+    session: Session,
+    *,
+    owner: Owner,
+    source_ip: str | None,
+    now: datetime | None = None,
+) -> None:
+    moment = now or datetime.now(UTC)
+    owner.failed_login_count = 0
+    owner.locked_until = None
+    owner.last_login_at = moment
+    audit(
+        session,
+        actor_type="owner",
+        actor_id=owner.id,
+        action="auth.login_succeeded",
+        source_ip=source_ip,
+    )
+    session.commit()
+
+
+def verify_owner_second_factor(
+    session: Session,
+    *,
+    owner: Owner,
+    code: str | None,
+    settings: Settings,
+    source_ip: str | None,
+    now: datetime | None = None,
+) -> bool:
+    if not owner_mfa_enabled(owner):
+        return True
+    if not code or not owner.mfa_secret_encrypted:
+        return False
+    moment = now or datetime.now(UTC)
+    secret = decrypt_secret(owner.mfa_secret_encrypted, settings.effective_token_pepper)
+    used_step = verify_totp(
+        secret,
+        code,
+        now=moment,
+        last_used_step=owner.mfa_last_used_step,
+    )
+    if used_step is not None:
+        owner.mfa_last_used_step = used_step
+        audit(
+            session,
+            actor_type="owner",
+            actor_id=owner.id,
+            action="auth.mfa_verified",
+            source_ip=source_ip,
+            details={"method": "totp"},
+        )
+        return True
+
+    candidate = hash_recovery_code(code, settings.effective_token_pepper)
+    hashes = list(owner.mfa_recovery_hashes or [])
+    matched_index: int | None = None
+    for index, stored in enumerate(hashes):
+        if hmac.compare_digest(candidate, stored):
+            matched_index = index
+    if matched_index is None:
+        return False
+    hashes.pop(matched_index)
+    owner.mfa_recovery_hashes = hashes
+    audit(
+        session,
+        actor_type="owner",
+        actor_id=owner.id,
+        action="auth.mfa_verified",
+        source_ip=source_ip,
+        details={"method": "recovery_code", "remaining": len(hashes)},
+    )
+    return True
+
+
+def begin_mfa_setup(owner: Owner) -> tuple[str, str]:
+    if owner_mfa_enabled(owner):
+        raise ConflictError("MFA is already enabled")
+    secret = generate_totp_secret()
+    return secret, totp_provisioning_uri(secret, owner.username)
+
+
+def enable_owner_mfa(
+    session: Session,
+    *,
+    owner: Owner,
+    secret: str,
+    code: str,
+    settings: Settings,
+    source_ip: str | None,
+    now: datetime | None = None,
+) -> list[str]:
+    if owner_mfa_enabled(owner):
+        raise ConflictError("MFA is already enabled")
+    moment = now or datetime.now(UTC)
+    used_step = verify_totp(secret, code, now=moment)
+    if used_step is None:
+        raise AuthenticationError("Invalid verification code")
+    recovery_codes = generate_recovery_codes()
+    owner.mfa_secret_encrypted = encrypt_secret(secret, settings.effective_token_pepper)
+    owner.mfa_recovery_hashes = [
+        hash_recovery_code(item, settings.effective_token_pepper) for item in recovery_codes
+    ]
+    owner.mfa_enabled_at = moment
+    owner.mfa_last_used_step = None
+    owner.session_version += 1
+    audit(
+        session,
+        actor_type="owner",
+        actor_id=owner.id,
+        action="auth.mfa_enabled",
+        target_type="owner",
+        target_id=owner.id,
+        source_ip=source_ip,
+    )
+    session.commit()
+    return recovery_codes
+
+
+def disable_owner_mfa(
+    session: Session,
+    *,
+    owner: Owner,
+    current_password: str,
+    code: str,
+    settings: Settings,
+    source_ip: str | None,
+) -> None:
+    if not owner_mfa_enabled(owner):
+        raise ConflictError("MFA is not enabled")
+    if not verify_password(current_password, owner.password_hash):
+        raise AuthenticationError("Current password is incorrect")
+    if not verify_owner_second_factor(
+        session,
+        owner=owner,
+        code=code,
+        settings=settings,
+        source_ip=source_ip,
+    ):
+        raise AuthenticationError("Invalid verification code")
+    owner.mfa_secret_encrypted = None
+    owner.mfa_recovery_hashes = []
+    owner.mfa_enabled_at = None
+    owner.mfa_last_used_step = None
+    owner.session_version += 1
+    audit(
+        session,
+        actor_type="owner",
+        actor_id=owner.id,
+        action="auth.mfa_disabled",
+        target_type="owner",
+        target_id=owner.id,
+        source_ip=source_ip,
+    )
+    session.commit()
 
 
 def change_owner_password(
@@ -224,6 +453,9 @@ def enroll_device(
         device.rustdesk_version = payload.rustdesk_version
         device.metadata_json = payload.metadata
         device.token_hash = digest
+        device.pending_token_hash = None
+        device.credential_rotation_nonce = None
+        device.credential_rotation_requested_at = None
         device.revoked_at = None
         device.last_seen = moment
         device.last_ip = source_ip
@@ -380,7 +612,7 @@ def update_device(
     changed: dict[str, Any] = {}
     if alias is not None and alias != device.alias:
         changed["alias"] = {"from": device.alias, "to": alias}
-        device.alias = alias.strip()
+        device.alias = alias
     if tags is not None and tags != (device.tags or []):
         changed["tags"] = {"from": device.tags or [], "to": tags}
         device.tags = tags
@@ -410,6 +642,9 @@ def revoke_device(
 ) -> Device:
     if device.revoked_at is None:
         device.revoked_at = now or datetime.now(UTC)
+        device.pending_token_hash = None
+        device.credential_rotation_nonce = None
+        device.credential_rotation_requested_at = None
         audit(
             session,
             actor_type="owner",
