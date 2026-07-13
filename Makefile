@@ -23,8 +23,10 @@ test:
 
 check:
 	python -m compileall -q control-plane/src control-plane/migrations agent/sarmiento_agent.py ops/init_env.py
-	bash -n agent/install-linux.sh agent/install-macos.sh viewer/install-linux.sh viewer/install-macos.sh viewer/sarmiento-open.sh control-plane/entrypoint.sh ops/backup.sh ops/restore.sh ops/smoke.sh
+	bash -n agent/install-linux.sh agent/install-macos.sh viewer/install-linux.sh viewer/install-macos.sh viewer/sarmiento-open.sh viewer/sarmiento-workstation.sh viewer/tests/test-viewer.sh control-plane/entrypoint.sh ops/backup.sh ops/restore.sh ops/smoke.sh
 	node --check front/app.js
+	node --check front/sw.js
+	bash viewer/tests/test-viewer.sh
 	cd control-plane && python -m pytest -q
 
 smoke:
