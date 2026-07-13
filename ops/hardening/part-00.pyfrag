@@ -1,0 +1,200 @@
+from pathlib import Path
+import sys
+
+ROOT = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd()
+
+
+def read(path: str) -> str:
+    return (ROOT / path).read_text()
+
+
+def write(path: str, content: str) -> None:
+    target = ROOT / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content)
+
+
+def replace_once(content: str, old: str, new: str, *, label: str) -> str:
+    count = content.count(old)
+    if count != 1:
+        raise RuntimeError(f"{label}: expected exactly one match, found {count}")
+    return content.replace(old, new, 1)
+
+
+# models.py
+path = "control-plane/src/sarmiento/models.py"
+s = read(path)
+s = replace_once(
+    s,
+    '''    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)\n\n    __table_args__''',
+    '''    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)\n    credential_rotation_requested_at: Mapped[datetime | None] = mapped_column(\n        DateTime(timezone=True), nullable=True\n    )\n    credential_rotation_nonce: Mapped[str | None] = mapped_column(String(64), nullable=True)\n    pending_token_hash: Mapped[str | None] = mapped_column(\n        String(64), nullable=True, unique=True, index=True\n    )\n\n    __table_args__''',
+    label="models rotation fields",
+)
+write(path, s)
+
+# schemas.py
+path = "control-plane/src/sarmiento/schemas.py"
+s = read(path)
+s = replace_once(
+    s,
+    '''class HeartbeatResponse(BaseModel):\n    accepted: bool = True\n    server_time: datetime\n    next_heartbeat_seconds: int\n''',
+    '''class HeartbeatResponse(BaseModel):\n    accepted: bool = True\n    server_time: datetime\n    next_heartbeat_seconds: int\n    credential_rotation_required: bool = False\n\n\nclass AgentTokenRotationResponse(BaseModel):\n    agent_token: str\n''',
+    label="heartbeat schema",
+)
+s = replace_once(
+    s,
+    '''    revoked_at: datetime | None\n    online: bool\n''',
+    '''    revoked_at: datetime | None\n    credential_rotation_pending: bool\n    online: bool\n''',
+    label="device view rotation flag",
+)
+write(path, s)
+
+# security.py
+path = "control-plane/src/sarmiento/security.py"
+s = read(path)
+s = replace_once(
+    s,
+    '''def hash_token(token: str, pepper: str) -> str:\n''',
+    '''def derive_token(prefix: str, *, subject: str, nonce: str, pepper: str) -> str:\n    """Derive a retry-safe secret without storing the raw token at rest."""\n    material = f"{prefix}:{subject}:{nonce}".encode()\n    digest = hmac.new(pepper.encode("utf-8"), material, hashlib.sha256).digest()\n    return f"{prefix}_{_b64(digest)}"\n\n\ndef hash_token(token: str, pepper: str) -> str:\n''',
+    label="derive token",
+)
+write(path, s)
+
+# services.py
+path = "control-plane/src/sarmiento/services.py"
+s = read(path)
+s = replace_once(
+    s,
+    "from .security import generate_token, hash_password, hash_token, verify_password",
+    "from .security import derive_token, generate_token, hash_password, hash_token, verify_password",
+    label="services security import",
+)
+s = replace_once(
+    s,
+    '''def enroll_device(\n''',
+    '''def enrollment_token_for_update_statement(token_digest: str):\n    """Select one enrollment token and serialize its consumption in PostgreSQL."""\n    return (\n        select(EnrollmentToken)\n        .where(EnrollmentToken.token_hash == token_digest)\n        .with_for_update()\n    )\n\n\ndef enroll_device(\n''',
+    label="enrollment lock helper",
+)
+s = replace_once(
+    s,
+    '''    enrollment = session.scalar(\n        select(EnrollmentToken).where(EnrollmentToken.token_hash == token_digest)\n    )''',
+    '''    enrollment = session.scalar(enrollment_token_for_update_statement(token_digest))''',
+    label="enrollment locked query",
+)
+old_auth = '''def authenticate_agent(session: Session, raw_token: str, settings: Settings) -> Device:\n    digest = hash_token(raw_token, settings.effective_token_pepper)\n    device = session.scalar(select(Device).where(Device.token_hash == digest))\n    if not device or device.revoked_at is not None:\n        raise AuthenticationError("Invalid or revoked agent token")\n    return device\n'''
+new_auth = '''def authenticate_agent(\n    session: Session,\n    raw_token: str,\n    settings: Settings,\n    *,\n    source_ip: str | None = None,\n) -> Device:\n    digest = hash_token(raw_token, settings.effective_token_pepper)\n    device = session.scalar(select(Device).where(Device.token_hash == digest))\n    if device and device.revoked_at is None:\n        return device\n\n    pending = session.scalar(\n        select(Device)\n        .where(Device.pending_token_hash == digest)\n        .with_for_update()\n        .execution_options(populate_existing=True)\n    )\n    if not pending or pending.revoked_at is not None:\n        raise AuthenticationError("Invalid or revoked agent token")\n\n    pending.token_hash = digest\n    pending.pending_token_hash = None\n    pending.credential_rotation_nonce = None\n    pending.credential_rotation_requested_at = None\n    audit(\n        session,\n        actor_type="agent",\n        actor_id=pending.id,\n        action="device.credential_rotated",\n        target_type="device",\n        target_id=pending.id,\n        source_ip=source_ip,\n    )\n    session.commit()\n    session.refresh(pending)\n    return pending\n'''
+s = replace_once(s, old_auth, new_auth, label="agent auth rotation promotion")
+s = replace_once(
+    s,
+    '''        "revoked_at": aware(device.revoked_at),\n        "online": online,''',
+    '''        "revoked_at": aware(device.revoked_at),\n        "credential_rotation_pending": device.credential_rotation_requested_at is not None,\n        "online": online,''',
+    label="device view pending",
+)
+old_rotate = '''def rotate_agent_token(\n    session: Session,\n    *,\n    device: Device,\n    settings: Settings,\n    owner: Owner,\n    source_ip: str | None,\n) -> str:\n    if device.revoked_at is not None:\n        raise ConflictError("Cannot rotate credentials for a revoked device")\n    raw = generate_token("sat")\n    device.token_hash = hash_token(raw, settings.effective_token_pepper)\n    audit(\n        session,\n        actor_type="owner",\n        actor_id=owner.id,\n        action="device.credential_rotated",\n        target_type="device",\n        target_id=device.id,\n        source_ip=source_ip,\n    )\n    session.commit()\n    return raw\n'''
+new_rotate = '''def request_agent_token_rotation(\n    session: Session,\n    *,\n    device: Device,\n    owner: Owner,\n    source_ip: str | None,\n    now: datetime | None = None,\n) -> Device:\n    if device.revoked_at is not None:\n        raise ConflictError("Cannot rotate credentials for a revoked device")\n    if device.credential_rotation_requested_at is None:\n        device.credential_rotation_requested_at = now or datetime.now(UTC)\n        device.credential_rotation_nonce = generate_token("nonce")\n        device.pending_token_hash = None\n        audit(\n            session,\n            actor_type="owner",\n            actor_id=owner.id,\n            action="device.credential_rotation_requested",\n            target_type="device",\n            target_id=device.id,\n            source_ip=source_ip,\n        )\n        session.commit()\n        session.refresh(device)\n    return device\n\n\ndef prepare_agent_token_rotation(\n    session: Session,\n    *,\n    device: Device,\n    settings: Settings,\n    source_ip: str | None,\n) -> str:\n    locked = session.scalar(\n        select(Device)\n        .where(Device.id == device.id)\n        .with_for_update()\n        .execution_options(populate_existing=True)\n    )\n    if not locked or locked.revoked_at is not None:\n        raise ConflictError("Cannot rotate credentials for a revoked device")\n    if not locked.credential_rotation_requested_at or not locked.credential_rotation_nonce:\n        raise ConflictError("Credential rotation was not requested")\n\n    raw = derive_token(\n        "sat",\n        subject=locked.id,\n        nonce=locked.credential_rotation_nonce,\n        pepper=settings.effective_token_pepper,\n    )\n    digest = hash_token(raw, settings.effective_token_pepper)\n    if locked.pending_token_hash != digest:\n        locked.pending_token_hash = digest\n        audit(\n            session,\n            actor_type="agent",\n            actor_id=locked.id,\n            action="device.credential_rotation_issued",\n            target_type="device",\n            target_id=locked.id,\n            source_ip=source_ip,\n        )\n        session.commit()\n    return raw\n'''
+s = replace_once(s, old_rotate, new_rotate, label="rotation protocol")
+write(path, s)
+
+# api.py
+path = "control-plane/src/sarmiento/api.py"
+s = read(path)
+s = replace_once(
+    s,
+    '''    AgentEnrollResponse,\n''',
+    '''    AgentEnrollResponse,\n    AgentTokenRotationResponse,\n''',
+    label="api rotation schema import",
+)
+s = replace_once(
+    s,
+    '''    record_heartbeat,\n''',
+    '''    prepare_agent_token_rotation,\n    record_heartbeat,\n    request_agent_token_rotation,\n''',
+    label="api service imports",
+)
+s = replace_once(
+    s,
+    '''def require_agent(\n    db: Db,\n    settings: SettingsDep,\n    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],\n) -> Device:''',
+    '''def require_agent(\n    request: Request,\n    db: Db,\n    settings: SettingsDep,\n    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],\n) -> Device:''',
+    label="agent dependency request",
+)
+s = replace_once(
+    s,
+    '''        return authenticate_agent(db, credentials.credentials, settings)''',
+    '''        return authenticate_agent(\n            db, credentials.credentials, settings, source_ip=client_ip(request)\n        )''',
+    label="agent auth source ip",
+)
+s = replace_once(
+    s,
+    '''    return HeartbeatResponse(server_time=moment, next_heartbeat_seconds=30)''',
+    '''    return HeartbeatResponse(\n        server_time=moment,\n        next_heartbeat_seconds=30,\n        credential_rotation_required=device.credential_rotation_requested_at is not None,\n    )''',
+    label="heartbeat rotation signal",
+)
+s = replace_once(
+    s,
+    '''\n\n@router.get("/devices", response_model=list[DeviceView])\n''',
+    '''\n\n@router.post("/agents/rotate-token", response_model=AgentTokenRotationResponse)\ndef agent_rotate_token(\n    request: Request,\n    db: Db,\n    settings: SettingsDep,\n    device: AgentDep,\n):\n    raw = prepare_agent_token_rotation(\n        db,\n        device=device,\n        settings=settings,\n        source_ip=client_ip(request),\n    )\n    return AgentTokenRotationResponse(agent_token=raw)\n\n\n@router.get("/devices", response_model=list[DeviceView])\n''',
+    label="agent rotation endpoint",
+)
+old_owner_endpoint = '''@router.post("/devices/{device_id}/rotate-token")\ndef rotate_token(\n    device_id: str,\n    request: Request,\n    db: Db,\n    settings: SettingsDep,\n    owner: OwnerDep,\n):\n    raw = rotate_agent_token(\n        db,\n        device=get_device(db, device_id),\n        settings=settings,\n        owner=owner,\n        source_ip=client_ip(request),\n    )\n    return {"agent_token": raw}\n'''
+new_owner_endpoint = '''@router.post("/devices/{device_id}/rotate-token", response_model=DeviceView)\ndef request_token_rotation(\n    device_id: str,\n    request: Request,\n    db: Db,\n    settings: SettingsDep,\n    owner: OwnerDep,\n):\n    device = request_agent_token_rotation(\n        db,\n        device=get_device(db, device_id),\n        owner=owner,\n        source_ip=client_ip(request),\n    )\n    return DeviceView(**device_to_view(device, settings))\n'''
+s = replace_once(s, old_owner_endpoint, new_owner_endpoint, label="owner rotation endpoint")
+write(path, s)
+
+# main.py
+path = "control-plane/src/sarmiento/main.py"
+s = read(path)
+s = replace_once(
+    s,
+    '''    async def lifespan(app: FastAPI):\n        create_schema(engine)\n''',
+    '''    async def lifespan(app: FastAPI):\n        if app_settings.environment.lower() != "production":\n            create_schema(engine)\n''',
+    label="production migration ownership",
+)
+write(path, s)
+
+# Agent Python
+path = "agent/sarmiento_agent.py"
+s = read(path)
+s = replace_once(
+    s,
+    '''def heartbeat_once(config_path: Path) -> None:\n    config = load_config(config_path)\n    request_json(\n        f"{config['base_url']}/api/v1/agents/heartbeat",\n        method="POST",\n        body=payload(config["rustdesk_id"]),\n        token=config["agent_token"],\n    )\n''',
+    '''def heartbeat_once(config_path: Path) -> None:\n    config = load_config(config_path)\n    response = request_json(\n        f"{config['base_url']}/api/v1/agents/heartbeat",\n        method="POST",\n        body=payload(config["rustdesk_id"]),\n        token=config["agent_token"],\n    )\n    if response.get("credential_rotation_required"):\n        rotated = request_json(\n            f"{config['base_url']}/api/v1/agents/rotate-token",\n            method="POST",\n            token=config["agent_token"],\n        )\n        config["agent_token"] = rotated["agent_token"]\n        save_config(config_path, config)\n        log("Agent credential rotated automatically")\n''',
+    label="python agent auto rotation",
+)
+write(path, s)
+
+# PowerShell agent
+path = "agent/sarmiento-agent.ps1"
+s = read(path)
+s = replace_once(
+    s,
+    '''function Send-Heartbeat {\n  $config=Read-AgentConfig\n  $headers=@{ Authorization="Bearer $($config.agent_token)" }\n  $body=(Get-HeartbeatBody $config.rustdesk_id) | ConvertTo-Json -Depth 6\n  Invoke-RestMethod -Method Post -Uri "$($config.base_url)/api/v1/agents/heartbeat" -Headers $headers -ContentType 'application/json' -Body $body | Out-Null\n}\n''',
+    '''function Send-Heartbeat {\n  $config=Read-AgentConfig\n  $headers=@{ Authorization="Bearer $($config.agent_token)" }\n  $body=(Get-HeartbeatBody $config.rustdesk_id) | ConvertTo-Json -Depth 6\n  $response=Invoke-RestMethod -Method Post -Uri "$($config.base_url)/api/v1/agents/heartbeat" -Headers $headers -ContentType 'application/json' -Body $body\n  if($response.credential_rotation_required){\n    $rotated=Invoke-RestMethod -Method Post -Uri "$($config.base_url)/api/v1/agents/rotate-token" -Headers $headers -ContentType 'application/json'\n    $config.agent_token=$rotated.agent_token\n    Write-AgentConfig $config\n    Write-AgentLog 'Agent credential rotated automatically'\n  }\n}\n''',
+    label="powershell agent auto rotation",
+)
+write(path, s)
+
+# Windows installer security
+path = "agent/install-windows.ps1"
+s = read(path)
+s = replace_once(
+    s,
+    '''  $base="$env:ProgramData\\Sarmiento"\n  New-Item -ItemType Directory -Force $base | Out-Null\n''',
+    '''  $base="$env:ProgramData\\Sarmiento"\n  New-Item -ItemType Directory -Force $base | Out-Null\n  & icacls.exe $base /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null\n  if($LASTEXITCODE -ne 0){ throw 'Could not secure the Sarmiento agent directory ACL.' }\n''',
+    label="windows agent ACL",
+)
+s = replace_once(
+    s,
+    '''  if(!$PermanentPassword){\n    $chars='abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'.ToCharArray()\n    $PermanentPassword=-join (1..18 | ForEach-Object { $chars | Get-Random })\n  }\n''',
+    '''  if(!$PermanentPassword){\n    $chars='abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'.ToCharArray()\n    $bytes=New-Object byte[] 18\n    [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)\n    $PermanentPassword=-join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })\n  }\n''',
+    label="windows CSPRNG password",
+)
+write(path, s)
+
+# Frontend
+path = "front/app.js"
+s = read(path)
+s = replace_once(
+    s,
+    "'device.updated':'Dispositivo actualizado','device.credential_rotated':'Credencial rotada','device.revoked'",
+    "'device.updated':'Dispositivo actualizado','device.credential_rotation_requested':'Rotación solicitada','device.credential_rotation_issued':'Nueva credencial emitida','device.credential_rotated':'Credencial rotada','device.revoked'",
+    label="frontend audit labels",
+)
