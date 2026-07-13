@@ -1,4 +1,4 @@
-.PHONY: init up down restart logs ps test check smoke backup restore
+.PHONY: init up down restart logs ps test check desktop-check desktop-build smoke backup restore
 
 init:
 	python3 ops/init_env.py
@@ -28,6 +28,13 @@ check:
 	node --check front/sw.js
 	bash viewer/tests/test-viewer.sh
 	cd control-plane && python -m pytest -q
+
+desktop-check:
+	cd desktop && npm ci && npm run build && npm run icons
+	cd desktop/src-tauri && cargo test --all-targets && cargo clippy --all-targets -- -D warnings
+
+desktop-build:
+	cd desktop && npm ci && npm run desktop:build
 
 smoke:
 	./ops/smoke.sh $${URL:-http://localhost}
