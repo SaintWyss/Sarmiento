@@ -39,5 +39,20 @@ jobs:
           retention-days: 7
       - name: Enforce dependency audit
         run: test "$(cat pip-audit.status)" = "0"
-      - name: Static security scan
-        run: bandit -q -r control-plane/src agent/sarmiento_agent.py ops/init_env.py -ll
+      - name: Generate static security report
+        shell: bash
+        run: |
+          set +e
+          bandit -q -r control-plane/src agent/sarmiento_agent.py ops/init_env.py -ll -f json -o bandit.json
+          echo $? > bandit.status
+          exit 0
+      - name: Upload static security report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Enforce static security scan
+        run: test "$(cat bandit.status)" = "0"
