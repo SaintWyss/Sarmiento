@@ -59,5 +59,10 @@ jobs:
         run: |
           cp infra/.env.example infra/.env
           docker compose --env-file infra/.env -f infra/compose.yaml config --quiet
+      - name: Verify pinned runtime images
+        run: |
+          docker manifest inspect postgres:16.4-alpine >/dev/null
+          docker manifest inspect caddy:2.8.4-alpine >/dev/null
+          docker manifest inspect rustdesk/rustdesk-server:1.1.15 >/dev/null
       - name: Build application image
         run: docker build -f control-plane/Dockerfile .
