@@ -1,0 +1,25 @@
+{
+  "name": "sarmiento-desktop",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1420",
+    "build": "tsc --noEmit && vite build",
+    "icons": "tauri icon src-tauri/icons/source.svg",
+    "tauri": "tauri",
+    "desktop:dev": "npm run icons && tauri dev",
+    "desktop:build": "npm run icons && tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-autostart": "2.5.1",
+    "@tauri-apps/plugin-deep-link": "2.4.9"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4",
+    "esbuild": "0.28.1",
+    "typescript": "7.0.2",
+    "vite": "8.1.4"
+  }
+}
