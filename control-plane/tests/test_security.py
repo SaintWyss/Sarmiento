@@ -42,3 +42,13 @@ def test_session_token_roundtrip():
     assert payload["sub"] == "owner-id"
     with pytest.raises(jwt.PyJWTError):
         decode_session_token(token, "y" * 32)
+
+
+def test_enrollment_token_consumption_uses_postgres_row_lock():
+    from sqlalchemy.dialects import postgresql
+
+    from sarmiento.services import enrollment_token_for_update_statement
+
+    statement = enrollment_token_for_update_statement("digest")
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE" in compiled

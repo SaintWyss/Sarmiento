@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from .config import Settings
 from .domain import DevicePresence, EnrollmentWindow
 from .models import AuditEvent, Device, EnrollmentToken, Owner
-from .security import generate_token, hash_password, hash_token, verify_password
+from .security import derive_token, generate_token, hash_password, hash_token, verify_password
 
 
 class DomainError(Exception):
@@ -180,6 +180,13 @@ def revoke_enrollment_token(
     return record
 
 
+def enrollment_token_for_update_statement(token_digest: str):
+    """Select one enrollment token and serialize its consumption in PostgreSQL."""
+    return (
+        select(EnrollmentToken).where(EnrollmentToken.token_hash == token_digest).with_for_update()
+    )
+
+
 def enroll_device(
     session: Session,
     *,
@@ -190,9 +197,7 @@ def enroll_device(
 ) -> tuple[Device, str]:
     moment = now or datetime.now(UTC)
     token_digest = hash_token(payload.enrollment_token, settings.effective_token_pepper)
-    enrollment = session.scalar(
-        select(EnrollmentToken).where(EnrollmentToken.token_hash == token_digest)
-    )
+    enrollment = session.scalar(enrollment_token_for_update_statement(token_digest))
     if not enrollment:
         raise AuthenticationError("Invalid enrollment token")
     window = EnrollmentWindow(
@@ -260,12 +265,43 @@ def enroll_device(
     return device, raw_agent_token
 
 
-def authenticate_agent(session: Session, raw_token: str, settings: Settings) -> Device:
+def authenticate_agent(
+    session: Session,
+    raw_token: str,
+    settings: Settings,
+    *,
+    source_ip: str | None = None,
+) -> Device:
     digest = hash_token(raw_token, settings.effective_token_pepper)
     device = session.scalar(select(Device).where(Device.token_hash == digest))
-    if not device or device.revoked_at is not None:
+    if device and device.revoked_at is None:
+        return device
+
+    pending = session.scalar(
+        select(Device)
+        .where(Device.pending_token_hash == digest)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if not pending or pending.revoked_at is not None:
         raise AuthenticationError("Invalid or revoked agent token")
-    return device
+
+    pending.token_hash = digest
+    pending.pending_token_hash = None
+    pending.credential_rotation_nonce = None
+    pending.credential_rotation_requested_at = None
+    audit(
+        session,
+        actor_type="agent",
+        actor_id=pending.id,
+        action="device.credential_rotated",
+        target_type="device",
+        target_id=pending.id,
+        source_ip=source_ip,
+    )
+    session.commit()
+    session.refresh(pending)
+    return pending
 
 
 def record_heartbeat(
@@ -315,6 +351,7 @@ def device_to_view(
         "created_at": aware(device.created_at),
         "updated_at": aware(device.updated_at),
         "revoked_at": aware(device.revoked_at),
+        "credential_rotation_pending": device.credential_rotation_requested_at is not None,
         "online": online,
         "connect_uri": f"sarmiento://connect/{device.rustdesk_id}",
     }
@@ -387,28 +424,71 @@ def revoke_device(
     return device
 
 
-def rotate_agent_token(
+def request_agent_token_rotation(
+    session: Session,
+    *,
+    device: Device,
+    owner: Owner,
+    source_ip: str | None,
+    now: datetime | None = None,
+) -> Device:
+    if device.revoked_at is not None:
+        raise ConflictError("Cannot rotate credentials for a revoked device")
+    if device.credential_rotation_requested_at is None:
+        device.credential_rotation_requested_at = now or datetime.now(UTC)
+        device.credential_rotation_nonce = generate_token("nonce")
+        device.pending_token_hash = None
+        audit(
+            session,
+            actor_type="owner",
+            actor_id=owner.id,
+            action="device.credential_rotation_requested",
+            target_type="device",
+            target_id=device.id,
+            source_ip=source_ip,
+        )
+        session.commit()
+        session.refresh(device)
+    return device
+
+
+def prepare_agent_token_rotation(
     session: Session,
     *,
     device: Device,
     settings: Settings,
-    owner: Owner,
     source_ip: str | None,
 ) -> str:
-    if device.revoked_at is not None:
-        raise ConflictError("Cannot rotate credentials for a revoked device")
-    raw = generate_token("sat")
-    device.token_hash = hash_token(raw, settings.effective_token_pepper)
-    audit(
-        session,
-        actor_type="owner",
-        actor_id=owner.id,
-        action="device.credential_rotated",
-        target_type="device",
-        target_id=device.id,
-        source_ip=source_ip,
+    locked = session.scalar(
+        select(Device)
+        .where(Device.id == device.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
-    session.commit()
+    if not locked or locked.revoked_at is not None:
+        raise ConflictError("Cannot rotate credentials for a revoked device")
+    if not locked.credential_rotation_requested_at or not locked.credential_rotation_nonce:
+        raise ConflictError("Credential rotation was not requested")
+
+    raw = derive_token(
+        "sat",
+        subject=locked.id,
+        nonce=locked.credential_rotation_nonce,
+        pepper=settings.effective_token_pepper,
+    )
+    digest = hash_token(raw, settings.effective_token_pepper)
+    if locked.pending_token_hash != digest:
+        locked.pending_token_hash = digest
+        audit(
+            session,
+            actor_type="agent",
+            actor_id=locked.id,
+            action="device.credential_rotation_issued",
+            target_type="device",
+            target_id=locked.id,
+            source_ip=source_ip,
+        )
+        session.commit()
     return raw
 
 

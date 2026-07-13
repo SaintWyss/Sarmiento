@@ -61,6 +61,13 @@ def generate_token(prefix: str, size: int = 32) -> str:
     return f"{prefix}_{secrets.token_urlsafe(size)}"
 
 
+def derive_token(prefix: str, *, subject: str, nonce: str, pepper: str) -> str:
+    """Derive a retry-safe secret without storing the raw token at rest."""
+    material = f"{prefix}:{subject}:{nonce}".encode()
+    digest = hmac.new(pepper.encode("utf-8"), material, hashlib.sha256).digest()
+    return f"{prefix}_{_b64(digest)}"
+
+
 def hash_token(token: str, pepper: str) -> str:
     return hmac.new(pepper.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
 

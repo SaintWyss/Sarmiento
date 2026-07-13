@@ -84,6 +84,11 @@ class HeartbeatResponse(BaseModel):
     accepted: bool = True
     server_time: datetime
     next_heartbeat_seconds: int
+    credential_rotation_required: bool = False
+
+
+class AgentTokenRotationResponse(BaseModel):
+    agent_token: str
 
 
 class DeviceUpdate(BaseModel):
@@ -117,6 +122,7 @@ class DeviceView(BaseModel):
     created_at: datetime
     updated_at: datetime
     revoked_at: datetime | None
+    credential_rotation_pending: bool
     online: bool
     connect_uri: str
 

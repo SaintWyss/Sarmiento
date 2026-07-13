@@ -15,6 +15,8 @@ function Install-SarmientoAgent {
   $Url=$Url.TrimEnd('/')
   $base="$env:ProgramData\Sarmiento"
   New-Item -ItemType Directory -Force $base | Out-Null
+  & icacls.exe $base /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+  if($LASTEXITCODE -ne 0){ throw 'Could not secure the Sarmiento agent directory ACL.' }
 
   function Find-RustDesk {
     $paths=@("$env:ProgramFiles\RustDesk\rustdesk.exe","${env:ProgramFiles(x86)}\RustDesk\rustdesk.exe")
@@ -40,7 +42,9 @@ function Install-SarmientoAgent {
   if($public.rustdesk_key){ & $rustdesk --option key $public.rustdesk_key | Out-Null }
   if(!$PermanentPassword){
     $chars='abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'.ToCharArray()
-    $PermanentPassword=-join (1..18 | ForEach-Object { $chars | Get-Random })
+    $bytes=New-Object byte[] 18
+    [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    $PermanentPassword=-join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })
   }
   & $rustdesk --password $PermanentPassword | Out-Null
   if(!$RustDeskId){ $RustDeskId=(& $rustdesk --get-id | Select-Object -First 1).Trim() }
