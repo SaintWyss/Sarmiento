@@ -10,6 +10,7 @@ La base 1.0.1 ya tenía buenas decisiones: separación del plano de datos, no al
 |---|---|---|
 | Alta | Cuenta administrativa sin segundo factor | Corregido: TOTP + recovery codes |
 | Alta | Body/metadata de agente sin límite global | Corregido: límite ASGI + 16 KiB metadata |
+| Alta | `cryptography 46.0.7` contenía OpenSSL vulnerable en wheels | Corregido: mínimo `48.0.1` y gate `pip-audit` |
 | Media | Lockout solo dependía del rate limit en memoria | Corregido: contador y bloqueo persistentes |
 | Media | JWT sin `iss`, `aud` ni claims obligatorios | Corregido |
 | Media | Buckets del rate limiter podían crecer sin límite | Corregido: límite y poda |
@@ -53,7 +54,8 @@ La base 1.0.1 ya tenía buenas decisiones: separación del plano de datos, no al
 - API corre como usuario no root.
 - Alembic es la autoridad del esquema en producción.
 - CI valida pruebas, lint, sintaxis, migraciones, Compose e imagen.
-- Workflow semanal ejecuta `pip-audit` y Bandit.
+- Workflow semanal ejecuta `pip-audit` y Bandit y conserva el informe de dependencias como artefacto.
+- `cryptography` se restringe a `>=48.0.1,<49` para evitar wheels enlazados contra la versión vulnerable de OpenSSL detectada por `GHSA-537c-gmf6-5ccf`.
 
 ## Riesgos residuales aceptados
 
