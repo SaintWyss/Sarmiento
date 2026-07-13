@@ -137,9 +137,7 @@ def test_csrf_and_device_management(tmp_path):
         )
         assert old_heartbeat.status_code == 401
 
-        revoked = client.post(
-            f"/api/v1/devices/{device_id}/revoke", headers=csrf_headers(client)
-        )
+        revoked = client.post(f"/api/v1/devices/{device_id}/revoke", headers=csrf_headers(client))
         assert revoked.status_code == 200
         assert revoked.json()["revoked_at"] is not None
 
@@ -153,9 +151,7 @@ def test_csrf_and_device_management(tmp_path):
 
 def test_login_failure_and_logout(tmp_path):
     with make_client(tmp_path) as client:
-        bad = client.post(
-            "/api/v1/auth/login", json={"username": "santiago", "password": "wrong"}
-        )
+        bad = client.post("/api/v1/auth/login", json={"username": "santiago", "password": "wrong"})
         assert bad.status_code == 401
         login(client)
         response = client.post("/api/v1/auth/logout", headers=csrf_headers(client))

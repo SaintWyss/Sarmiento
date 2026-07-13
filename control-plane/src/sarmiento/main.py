@@ -7,8 +7,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sqlalchemy import text
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__
 from .api import router

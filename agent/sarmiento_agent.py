@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Sarmiento agent for Linux/macOS. Uses only the Python standard library."""
+
 from __future__ import annotations
 
 import argparse
@@ -13,7 +14,6 @@ import socket
 import ssl
 import string
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -21,14 +21,18 @@ from pathlib import Path
 from typing import Any
 
 VERSION = "1.0.0"
-DEFAULT_CONFIG = Path(os.environ.get("SARMIENTO_AGENT_CONFIG", "/etc/sarmiento/agent.json"))
+DEFAULT_CONFIG = Path(
+    os.environ.get("SARMIENTO_AGENT_CONFIG", "/etc/sarmiento/agent.json")
+)
 
 
 def log(message: str) -> None:
     print(f"[sarmiento-agent] {message}", flush=True)
 
 
-def request_json(url: str, *, method: str = "GET", body: dict | None = None, token: str | None = None) -> dict:
+def request_json(
+    url: str, *, method: str = "GET", body: dict | None = None, token: str | None = None
+) -> dict:
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Accept": "application/json", "User-Agent": f"SarmientoAgent/{VERSION}"}
     if data is not None:
@@ -67,7 +71,9 @@ def rustdesk_executable() -> str:
 
 def run_rustdesk(*args: str, required: bool = True) -> str:
     command = [rustdesk_executable(), *args]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+    result = subprocess.run(
+        command, capture_output=True, text=True, timeout=30, check=False
+    )
     output = (result.stdout or result.stderr).strip()
     if required and result.returncode != 0:
         raise RuntimeError(f"RustDesk command failed ({result.returncode}): {output}")
@@ -89,7 +95,9 @@ def detect_rustdesk_id(explicit: str | None = None) -> str:
 
 def rustdesk_version() -> str:
     try:
-        return run_rustdesk("--version", required=False).splitlines()[0][:40] or "unknown"
+        return (
+            run_rustdesk("--version", required=False).splitlines()[0][:40] or "unknown"
+        )
     except Exception:
         return "unknown"
 
@@ -157,10 +165,16 @@ def enroll(args: argparse.Namespace) -> None:
     base_url = args.url.rstrip("/")
     permanent_password = args.password or random_password()
     public = request_json(f"{base_url}/api/v1/config/public")
-    configure_rustdesk(public.get("rustdesk_server", ""), public.get("rustdesk_key", ""), permanent_password)
+    configure_rustdesk(
+        public.get("rustdesk_server", ""),
+        public.get("rustdesk_key", ""),
+        permanent_password,
+    )
     rustdesk_id = detect_rustdesk_id(args.rustdesk_id)
     body = payload(rustdesk_id)
-    body.update({"enrollment_token": args.token, "alias": args.alias or socket.gethostname()})
+    body.update(
+        {"enrollment_token": args.token, "alias": args.alias or socket.gethostname()}
+    )
     result = request_json(f"{base_url}/api/v1/agents/enroll", method="POST", body=body)
     config = {
         "base_url": base_url,

@@ -79,7 +79,6 @@ def audit(
     return event
 
 
-
 def change_owner_password(
     session: Session,
     *,
@@ -293,7 +292,9 @@ def record_heartbeat(
     return device
 
 
-def device_to_view(device: Device, settings: Settings, now: datetime | None = None) -> dict[str, Any]:
+def device_to_view(
+    device: Device, settings: Settings, now: datetime | None = None
+) -> dict[str, Any]:
     moment = now or datetime.now(UTC)
     online = DevicePresence(
         last_seen=aware(device.last_seen), revoked_at=aware(device.revoked_at)

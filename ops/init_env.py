@@ -44,7 +44,9 @@ def main() -> int:
     parsed = urlparse(site if "://" in site else f"https://{site}")
     hostname = parsed.hostname or "localhost"
     secure = parsed.scheme == "https"
-    database_url = f"postgresql+psycopg://sarmiento:{quote_plus(db_password)}@db:5432/sarmiento"
+    database_url = (
+        f"postgresql+psycopg://sarmiento:{quote_plus(db_password)}@db:5432/sarmiento"
+    )
     values = {
         "POSTGRES_PASSWORD": db_password,
         "SARMIENTO_DATABASE_URL": database_url,
@@ -61,7 +63,9 @@ def main() -> int:
         "SARMIENTO_RUSTDESK_SERVER": args.rustdesk_server,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text("\n".join(f"{key}={value}" for key, value in values.items()) + "\n")
+    args.output.write_text(
+        "\n".join(f"{key}={value}" for key, value in values.items()) + "\n"
+    )
     os.chmod(args.output, 0o600)
     print(f"Created {args.output} with mode 0600")
     if generated_password:

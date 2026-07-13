@@ -31,10 +31,10 @@ from .schemas import (
     StatsView,
 )
 from .security import (
+    DUMMY_PASSWORD_HASH,
     decode_session_token,
     generate_csrf_token,
     issue_session_token,
-    DUMMY_PASSWORD_HASH,
     verify_password,
 )
 from .services import (
@@ -217,6 +217,7 @@ def password_change(
     response.delete_cookie("sarmiento_session", path="/")
     response.delete_cookie("sarmiento_csrf", path="/")
 
+
 @router.get("/config/public", response_model=PublicConfigView)
 def public_config(settings: SettingsDep):
     return PublicConfigView(
@@ -276,9 +277,7 @@ def delete_enrollment_token(
     db: Db,
     owner: OwnerDep,
 ):
-    item = revoke_enrollment_token(
-        db, token_id=token_id, owner=owner, source_ip=client_ip(request)
-    )
+    item = revoke_enrollment_token(db, token_id=token_id, owner=owner, source_ip=client_ip(request))
     return EnrollmentTokenView(
         id=item.id,
         label=item.label,
