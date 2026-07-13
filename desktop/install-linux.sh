@@ -3,11 +3,12 @@ set -euo pipefail
 
 APP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/sarmiento-desktop"
 APP_IMAGE="$APP_DIR/Sarmiento.AppImage"
+APP_ICON="$APP_DIR/sarmiento.svg"
 DESKTOP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 DESKTOP_FILE="$DESKTOP_DIR/ar.saintwyss.sarmiento.desktop"
 
 uninstall() {
-  rm -f "$APP_IMAGE" "$DESKTOP_FILE"
+  rm -f "$APP_IMAGE" "$APP_ICON" "$DESKTOP_FILE"
   rmdir "$APP_DIR" 2>/dev/null || true
   if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true
@@ -40,6 +41,10 @@ fi
 
 install -Dm755 "$SOURCE" "$APP_IMAGE"
 install -d -m755 "$DESKTOP_DIR"
+ICON_SOURCE="$(cd -- "$(dirname -- "$0")" && pwd)/src-tauri/icons/source.svg"
+if [[ -f "$ICON_SOURCE" ]]; then
+  install -Dm644 "$ICON_SOURCE" "$APP_ICON"
+fi
 
 cat >"$DESKTOP_FILE" <<EOF
 [Desktop Entry]
@@ -47,7 +52,7 @@ Type=Application
 Name=Sarmiento
 Comment=Controlá tus equipos, pantallas y sesiones remotas
 Exec=$APP_IMAGE %U
-Icon=ar.saintwyss.sarmiento
+Icon=$APP_ICON
 Terminal=false
 Categories=Network;RemoteAccess;Utility;
 MimeType=x-scheme-handler/sarmiento;
@@ -64,4 +69,3 @@ fi
 
 echo "Sarmiento Desktop instalado en $APP_IMAGE"
 echo "Abrilo desde el menú de KDE. No hace falta usar la terminal para operarlo."
-
