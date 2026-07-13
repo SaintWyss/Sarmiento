@@ -83,21 +83,31 @@ pub fn connect_device(rustdesk_id: String, pause_deskflow: bool) -> Result<(), S
     if !valid_rustdesk_id(&rustdesk_id) {
         return Err("El ID de RustDesk contiene caracteres no permitidos".into());
     }
-    if pause_deskflow {
+    let paused_unit = if pause_deskflow {
         let unit = deskflow_unit()?;
         if !systemctl_user(&["stop", unit])? {
             return Err(format!("No se pudo pausar {unit}"));
         }
-    }
-    Command::new("rustdesk")
+        Some(unit)
+    } else {
+        None
+    };
+    let launch = Command::new("rustdesk")
         .arg("--connect")
         .arg(rustdesk_id)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("No se pudo abrir RustDesk: {error}"))?;
-    Ok(())
+        .spawn();
+    match launch {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            if let Some(unit) = paused_unit {
+                let _ = systemctl_user(&["start", unit]);
+            }
+            Err(format!("No se pudo abrir RustDesk: {error}"))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -113,4 +123,3 @@ mod tests {
         assert!(!valid_rustdesk_id("123/../../bin"));
     }
 }
-
