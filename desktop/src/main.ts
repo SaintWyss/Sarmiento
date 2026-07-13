@@ -420,7 +420,8 @@ function openEnrollmentDialog(): void {
 
 function openSecurityDialog(): void {
   if (!dashboard) return;
-  const current = input("password", "Contraseña actual");
+  const mfaPassword = input("password", "Contraseña actual");
+  const currentPassword = input("password", "Contraseña actual");
   const next = input("password", "Nueva contraseña (mínimo 12)");
   const code = input("text", "Código MFA");
   const mfaBox = el("div", { className: "security-box" });
@@ -431,11 +432,11 @@ function openSecurityDialog(): void {
       mfaBox.append(
         el("strong", { text: "MFA está activado" }),
         el("p", { className: "muted", text: "Para desactivarlo necesitás la contraseña y un código vigente." }),
-        field("Contraseña", current),
+        field("Contraseña", mfaPassword),
         field("Código", code),
         button("Desactivar MFA", "danger-button full", () => {
           void safe(async () => {
-            await call("disable_mfa", { currentPassword: current.value, code: code.value });
+            await call("disable_mfa", { currentPassword: mfaPassword.value, code: code.value });
             modal.close();
             renderLogin();
             showToast("MFA desactivado. Iniciá sesión nuevamente.");
@@ -462,6 +463,10 @@ function openSecurityDialog(): void {
                     el("pre", { text: enabled.recovery_codes.join("\n") }),
                     button("Copiar códigos", "secondary full", () => {
                       void navigator.clipboard.writeText(enabled.recovery_codes.join("\n"));
+                    }),
+                    button("Ya guardé los códigos", "primary full", () => {
+                      modal.close();
+                      renderLogin();
                     })
                   );
                 });
@@ -479,11 +484,11 @@ function openSecurityDialog(): void {
     mfaBox,
     el("hr"),
     el("h3", { text: "Cambiar contraseña" }),
-    field("Contraseña actual", current),
+    field("Contraseña actual", currentPassword),
     field("Nueva contraseña", next),
     button("Cambiar contraseña", "primary full", () => {
       void safe(async () => {
-        await call("change_password", { currentPassword: current.value, newPassword: next.value });
+        await call("change_password", { currentPassword: currentPassword.value, newPassword: next.value });
         modal.close();
         renderLogin();
         showToast("Contraseña cambiada. Iniciá sesión nuevamente.");
