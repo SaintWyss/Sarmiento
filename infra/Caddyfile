@@ -1,0 +1,17 @@
+{$SARMIENTO_SITE_ADDRESS:http://localhost} {
+  encode zstd gzip
+  reverse_proxy api:8000
+  header {
+    -Server
+    X-Content-Type-Options nosniff
+    X-Frame-Options DENY
+    Referrer-Policy no-referrer
+    Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+    Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+  }
+  log {
+    output stdout
+    format json
+  }
+}
