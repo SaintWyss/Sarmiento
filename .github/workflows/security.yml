@@ -20,11 +20,11 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: control-plane/pyproject.toml
-      - name: Install project and scanners
+      - name: Install scanners
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ./control-plane pip-audit bandit
+          python -m pip install pip-audit bandit
       - name: Dependency audit
-        run: pip-audit
+        run: pip-audit ./control-plane
       - name: Static security scan
         run: bandit -q -r control-plane/src agent/sarmiento_agent.py ops/init_env.py -ll
