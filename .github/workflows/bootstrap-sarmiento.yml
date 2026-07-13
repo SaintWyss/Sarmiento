@@ -55,7 +55,7 @@ jobs:
           base64 -d /tmp/sarmiento-src.b64 > /tmp/sarmiento-src.tar.gz
           echo "9a91a20e2e35285dc58e8164af8c40c1af49b3b612f2732566e3cfec1cd41815  /tmp/sarmiento-src.tar.gz" | sha256sum --check -
           tar -xzf /tmp/sarmiento-src.tar.gz -C .
-          rm -f infra/docker-compose.yml .github/workflows/bootstrap-sarmiento.yml
+          rm -f infra/docker-compose.yml .github/workflows/ci.yml
 
       - name: Commit complete product tree
         run: |
