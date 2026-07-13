@@ -4,7 +4,9 @@ Sarmiento es una plataforma personal de control remoto para administrar tus prop
 
 ## Estado
 
-**Versión 1.2 implementada.** El repositorio contiene backend, panel web/PWA, agentes Linux, Windows y macOS, infraestructura Docker, HTTPS, PostgreSQL, backups, pruebas, escaneo de seguridad y CI.
+**Control-plane 1.2 y Sarmiento Desktop 1.0 implementados.** El repositorio contiene la aplicación
+nativa Linux, backend, panel web/PWA complementario, agentes Linux, Windows y macOS,
+infraestructura Docker, HTTPS, PostgreSQL, backups, pruebas, escaneo de seguridad y CI.
 
 La validación automática cubre el control-plane, migraciones, scripts, contenedores y agentes. La aceptación final de captura/control siempre debe ejecutarse con las máquinas reales porque permisos de pantalla, Wayland, firewalls, NAT y el protocolo local `sarmiento://` dependen del sistema operativo.
 
@@ -19,7 +21,8 @@ La validación automática cubre el control-plane, migraciones, scripts, contene
 - Credenciales independientes por agente, almacenadas únicamente como HMAC.
 - Rotación automática de credenciales en dos fases, tolerante a reintentos y cortes de red.
 - Heartbeat cada 30 segundos, estado online/offline e inventario técnico acotado.
-- Panel responsive instalable como PWA.
+- **Sarmiento Desktop nativo para KDE/Linux**, con ventana propia, bandeja, autostart y AppImage.
+- Panel responsive instalable como PWA para móvil y acceso de emergencia.
 - Conexión 1-click mediante `sarmiento://` y copia de ID como fallback.
 - Modo estación Linux desde la interfaz: Deskflow para pantallas físicas o RustDesk dentro del monitor.
 - Administración de alias, etiquetas, revocación y auditoría.
@@ -32,11 +35,14 @@ La validación automática cubre el control-plane, migraciones, scripts, contene
 
 ```mermaid
 flowchart LR
-    Browser[Browser / PWA] -->|HTTPS| Caddy
+    Desktop[Sarmiento Desktop] -->|HTTPS| Caddy
+    Browser[Panel web / PWA opcional] -->|HTTPS| Caddy
     Agent[Agent Linux / Windows / macOS] -->|Enroll + heartbeat HTTPS| Caddy
     Caddy --> API[FastAPI control-plane]
     API --> DB[(PostgreSQL)]
-    Viewer[RustDesk viewer] <-->|P2P E2E o relay| Host[RustDesk host]
+    Desktop -->|proceso local| Viewer[RustDesk viewer]
+    Desktop -->|systemd user| Deskflow
+    Viewer <-->|P2P E2E o relay| Host[RustDesk host]
     Viewer --> HBBS[hbbs]
     Host --> HBBS
     Viewer --> HBBR[hbbr]
@@ -130,16 +136,24 @@ Los instaladores:
 3. Abrí Sarmiento o instalalo como PWA.
 4. Pulsá **Conectar**. Si el sistema no abre el deep link, copiá el ID y pegalo en RustDesk.
 
-## Estación de trabajo Linux
+## Sarmiento Desktop para Linux
 
-En KDE/X11, el panel ofrece dos acciones gráficas sin depender de la terminal:
+En KDE/X11 se instala como un programa real. La terminal se usa únicamente para compilar o
+instalar el AppImage; después todas las operaciones se realizan en su ventana:
 
 - **Usar pantallas físicas:** activa el servicio Deskflow local.
 - **Abrir en monitor:** pausa Deskflow y abre el dispositivo elegido mediante RustDesk.
 
-Instalá o actualizá una vez el Viewer desde **Conexión 1-click** para registrar el protocolo y
-el companion local. La configuración, límites y rollback están en
-[`docs/WORKSTATION.md`](docs/WORKSTATION.md).
+```bash
+cd desktop
+npm ci
+npm run desktop:build
+./install-linux.sh src-tauri/target/release/bundle/appimage/Sarmiento_*.AppImage
+```
+
+La aplicación se conecta al control-plane por HTTPS, conserva la sesión solo en memoria, controla
+las unidades Deskflow conocidas y abre RustDesk sin exponer un shell al frontend. La construcción,
+instalación, límites y rollback están en [`docs/WORKSTATION.md`](docs/WORKSTATION.md).
 
 ## Desarrollo y validación
 
@@ -150,6 +164,7 @@ pip install -e 'control-plane[dev]'
 
 make test
 make check
+make desktop-check
 ```
 
 Prueba local:
@@ -177,6 +192,7 @@ make backup
 ## Versiones fijadas
 
 - Sarmiento control-plane: `1.2.0`.
+- Sarmiento Desktop: `1.0.0`.
 - RustDesk client: `1.4.9` en instaladores.
 - RustDesk server OSS: `1.1.15`.
 - PostgreSQL: `16.4-alpine`.
