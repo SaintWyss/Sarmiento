@@ -1,0 +1,114 @@
+name: sarmiento
+
+services:
+  db:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_USER: sarmiento
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/.env}
+      POSTGRES_DB: sarmiento
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sarmiento -d sarmiento"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks: [control]
+
+  hbbr:
+    image: rustdesk/rustdesk-server:1.1.15
+    command: hbbr
+    ports:
+      - "21117:21117/tcp"
+      - "21119:21119/tcp"
+    volumes:
+      - rustdesk-data:/root
+    restart: unless-stopped
+    networks: [rustdesk]
+
+  hbbs:
+    image: rustdesk/rustdesk-server:1.1.15
+    command: hbbs -r ${SARMIENTO_RUSTDESK_SERVER:?set SARMIENTO_RUSTDESK_SERVER}:21117
+    depends_on: [hbbr]
+    ports:
+      - "21115:21115/tcp"
+      - "21116:21116/tcp"
+      - "21116:21116/udp"
+      - "21118:21118/tcp"
+    volumes:
+      - rustdesk-data:/root
+    restart: unless-stopped
+    networks: [rustdesk]
+
+  api:
+    build:
+      context: ..
+      dockerfile: control-plane/Dockerfile
+    environment:
+      SARMIENTO_ENVIRONMENT: ${SARMIENTO_ENVIRONMENT:-production}
+      SARMIENTO_DATABASE_URL: ${SARMIENTO_DATABASE_URL}
+      SARMIENTO_OWNER_USERNAME: ${SARMIENTO_OWNER_USERNAME}
+      SARMIENTO_OWNER_PASSWORD: ${SARMIENTO_OWNER_PASSWORD}
+      SARMIENTO_SESSION_SECRET: ${SARMIENTO_SESSION_SECRET}
+      SARMIENTO_TOKEN_PEPPER: ${SARMIENTO_TOKEN_PEPPER}
+      SARMIENTO_COOKIE_SECURE: ${SARMIENTO_COOKIE_SECURE:-true}
+      SARMIENTO_ALLOWED_ORIGINS: ${SARMIENTO_ALLOWED_ORIGINS}
+      SARMIENTO_ALLOWED_HOSTS: ${SARMIENTO_ALLOWED_HOSTS}
+      SARMIENTO_PUBLIC_BASE_URL: ${SARMIENTO_PUBLIC_BASE_URL}
+      SARMIENTO_RUSTDESK_SERVER: ${SARMIENTO_RUSTDESK_SERVER}
+      SARMIENTO_RUSTDESK_KEY_FILE: /rustdesk-data/id_ed25519.pub
+      SARMIENTO_STATIC_DIR: /app/front
+      SARMIENTO_AGENT_DIR: /app/agent
+      SARMIENTO_VIEWER_DIR: /app/viewer
+      SARMIENTO_FORWARDED_ALLOW_IPS: "*"
+      SARMIENTO_CSRF_ENABLED: "true"
+    volumes:
+      - rustdesk-data:/rustdesk-data:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      hbbs:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks: [control]
+
+  caddy:
+    image: caddy:2.8.4-alpine
+    environment:
+      SARMIENTO_SITE_ADDRESS: ${SARMIENTO_SITE_ADDRESS:-http://localhost}
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [control]
+
+networks:
+  control:
+    driver: bridge
+  rustdesk:
+    driver: bridge
+
+volumes:
+  postgres-data:
+    name: sarmiento-postgres-data
+  rustdesk-data:
+    name: sarmiento-rustdesk-data
+  caddy-data:
+    name: sarmiento-caddy-data
+  caddy-config:
+    name: sarmiento-caddy-config

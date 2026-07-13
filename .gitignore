@@ -1,0 +1,16 @@
+.env
+infra/.env
+*.db
+*.sqlite
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+dist/
+build/
+*.egg-info/
+backups/
+infra/data/
+infra/pgdata/
+.DS_Store
+Thumbs.db

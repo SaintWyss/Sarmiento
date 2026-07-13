@@ -1,0 +1,19 @@
+[Unit]
+Description=Sarmiento device presence agent
+After=network-online.target rustdesk.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/sarmiento/sarmiento_agent.py run
+Restart=always
+RestartSec=10
+User=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc/sarmiento
+
+[Install]
+WantedBy=multi-user.target

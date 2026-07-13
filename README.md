@@ -1,56 +1,175 @@
 # Sarmiento
 
-AnyDesk propio para manejar los PCs propios y cualquier máquina futura. Control remoto
-**pantalla + mouse/teclado**.
-
-**Enfoque:** no se reinventa el motor A/V. **RustDesk OSS** (self-host, Docker) hace
-captura/encode/NAT/crypto. Encima se construye un **control-plane hexagonal (Python/FastAPI)**
-que aporta el cerebro: enrolamiento, presencia por heartbeat, inventario, auth, dashboard y
-conexión 1-click. El control-plane **nunca** toca el código ni el sqlite de RustDesk.
+Sarmiento es una plataforma personal de control remoto para administrar tus propias computadoras desde cualquier lugar. Usa **RustDesk OSS** como motor de pantalla, teclado, mouse, audio, transferencia y relay, y agrega un **control-plane propio** para inventario, enrolamiento, presencia, seguridad, auditoría y conexión rápida.
 
 ## Estado
 
-📋 **Planificación cerrada — construcción pendiente (la hacés vos).**
+**Versión 1.0 implementada.** El repositorio contiene backend, panel web/PWA, agentes Linux, Windows y macOS, infraestructura Docker, HTTPS, base de datos, backups, pruebas y CI.
 
-| Artefacto | Ruta |
-|-----------|------|
-| Diseño (spec v2, aprobado) | `docs/superpowers/specs/2026-07-12-remotedesk-control-plane-design.md` |
-| Hallazgos Fase 0 (GO-PARCIAL) | `docs/superpowers/specs/FASE0-FINDINGS.md` |
-| Bitácora inspección hbbs | `spikes/inspect_hbbs.md` |
-| Plan spike Fase 0 (cerrado) | `docs/superpowers/plans/2026-07-12-fase0-spike.md` |
-| **Plan de construcción MVP v1** | `docs/superpowers/plans/2026-07-12-mvp-v1.md` |
-| Infra RustDesk server (listo) | `infra/docker-compose.yml` |
+La validación automática cubre el control-plane y los agentes. La última aceptación siempre debe ejecutarse con las máquinas reales porque permisos de captura, Wayland, firewalls, NAT y permisos del protocolo local `sarmiento://` dependen del sistema operativo.
 
-## Hallazgo clave (Fase 0)
+## Qué incluye
 
-El hbbs OSS **no persiste el estado online** de los peers (vive en RAM; solo RustDesk Pro
-lo expone). Por eso la presencia se resuelve con un **agent-heartbeat** propio, y el agente
-se auto-registra en el control-plane → una sola fuente de verdad, 100% desacoplado.
+- RustDesk Server OSS self-hosted: `hbbs` + `hbbr`.
+- Control-plane FastAPI + PostgreSQL.
+- Inicio de sesión del propietario con cookie HttpOnly, CSRF y rate limiting.
+- Tokens de enrolamiento de uso único y vencimiento configurable.
+- Credenciales independientes por agente, almacenadas únicamente como hash.
+- Heartbeat cada 30 segundos, estado online/offline e inventario técnico.
+- Panel responsive instalable como PWA.
+- Conexión 1-click mediante el protocolo local `sarmiento://` y copia del ID como fallback.
+- Administración de alias, etiquetas, revocación y rotación de credenciales.
+- Auditoría de accesos y cambios administrativos.
+- Instaladores para Linux/systemd, Windows/Scheduled Tasks y macOS/launchd.
+- Lanzador 1-click propio `sarmiento://` para Linux, Windows y macOS.
+- HTTPS automático con Caddy.
+- Migraciones Alembic, backups, restore, smoke tests y GitHub Actions.
 
-## Cómo construir
+## Arquitectura
 
-Seguí el plan MVP tarea por tarea (TDD, commits atómicos):
-`docs/superpowers/plans/2026-07-12-mvp-v1.md`. Cada tarea trae el test primero, el código y
-el commit. Arranca por la Task 1 (scaffold + domain).
+```text
+Browser / PWA
+      │ HTTPS
+      ▼
+   Caddy ─────► FastAPI control-plane ─────► PostgreSQL
+                    ▲       ▲
+                    │       └── agente Linux / Windows / macOS (enroll + heartbeat)
+                    │
+                    └── inventario, auth y auditoría
 
-Estructura objetivo:
-
+RustDesk viewer ────── E2E / P2P o relay ────── RustDesk host
+                  hbbs rendezvous + hbbr relay
 ```
-control-plane/   FastAPI hexagonal (domain / application / adapters) — a construir
-agent/           installer + heartbeat systemd — a construir
-front/           dashboard estático — a construir
-infra/           RustDesk server (hbbs+hbbr) [+ postgres en Task 11] — docker compose
-docs/ spikes/    diseño, planes, findings
+
+El control-plane **no procesa video ni eventos de entrada** y **no guarda la contraseña permanente de RustDesk**. Esa contraseña se genera/configura en la máquina controlada y se muestra una sola vez durante la instalación.
+
+## Requisitos de despliegue
+
+- Servidor Linux con Docker Engine y Docker Compose.
+- IP pública o VPS accesible desde las máquinas viewer y host.
+- Un dominio para el panel, por ejemplo `control.example.com`.
+- Un hostname o IP para RustDesk, por ejemplo `desk.example.com`.
+- Puertos abiertos:
+  - `80/tcp`, `443/tcp`, `443/udp` para el panel y HTTPS.
+  - `21115/tcp`.
+  - `21116/tcp` y `21116/udp`.
+  - `21117/tcp`.
+  - `21118/tcp` y `21119/tcp` si se conserva soporte web de RustDesk.
+
+## Instalación del servidor
+
+```bash
+git clone https://github.com/SaintWyss/Sarmiento.git
+cd Sarmiento
+
+python3 ops/init_env.py \
+  --site-address https://control.example.com \
+  --rustdesk-server desk.example.com \
+  --owner owner
+
+make up
+make smoke URL=https://control.example.com
 ```
 
-## Quickstart (cuando esté construido)
+El generador crea `infra/.env` con permisos `0600`, contraseña de PostgreSQL, secreto de sesión y pepper independientes. Si no ingresás una contraseña de propietario de forma interactiva, genera una y la muestra una sola vez.
 
-1. `cd infra && docker compose up -d` — server RustDesk (+ Postgres).
-2. Levantar el control-plane (`uvicorn src.adapters.web_api:app --port 8000`).
-3. Crear un `enroll-token` desde el dashboard.
-4. En la máquina a controlar: `CP_URL=... API_TOKEN=... ENROLL_TOKEN=... RD_SERVER=... RD_KEY=... agent/install.sh`.
-5. Abrir el dashboard, ver la máquina online, **Conectar**.
+Abrí el panel, iniciá sesión y pulsá **Añadir equipo**.
 
-## Licencia
+## Enrolar una máquina
 
-RustDesk es AGPL; se corre sin modificar. El control-plane es código propio.
+El panel crea un token temporal y muestra el comando exacto.
+
+Linux:
+
+```bash
+curl -fsSL https://control.example.com/agent/install-linux.sh | \
+  sudo bash -s -- --url https://control.example.com --token 'set_...'
+```
+
+Windows PowerShell como administrador:
+
+```powershell
+iwr https://control.example.com/agent/install-windows.ps1 -UseBasicParsing | iex
+Install-SarmientoAgent -Url 'https://control.example.com' -Token 'set_...'
+```
+
+macOS, con RustDesk ya instalado en `/Applications`:
+
+```bash
+curl -fsSL https://control.example.com/agent/install-macos.sh | sudo bash -s -- \
+  --url https://control.example.com --token 'set_...'
+```
+
+Los instaladores:
+
+1. Instalan RustDesk 1.4.9 en Linux/Windows cuando no está presente; en macOS verifican la aplicación instalada.
+2. Configuran el ID Server y la clave pública del servidor.
+3. Generan una contraseña permanente aleatoria de RustDesk.
+4. Obtienen el ID mediante `rustdesk --get-id`.
+5. Enrolan el equipo en Sarmiento.
+6. Instalan el heartbeat persistente.
+7. Muestran la contraseña permanente para guardarla en un gestor de contraseñas.
+
+## Uso desde celular
+
+1. Instalá el cliente oficial de RustDesk en el celular.
+2. Configuralo con el mismo ID Server y clave pública que muestra Sarmiento.
+3. Abrí Sarmiento en el navegador o instalalo como PWA.
+4. Pulsá **Conectar**. Si el sistema no abre el deep link, copiá el ID y pegalo en RustDesk.
+
+## Desarrollo y validación
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e 'control-plane[dev]'
+
+make test
+make check
+```
+
+Prueba local del backend:
+
+```bash
+cd control-plane
+SARMIENTO_OWNER_PASSWORD='a-secure-local-password' \
+SARMIENTO_SESSION_SECRET='replace-with-at-least-32-random-bytes' \
+SARMIENTO_STATIC_DIR='../front' \
+SARMIENTO_AGENT_DIR='../agent' \
+SARMIENTO_VIEWER_DIR='../viewer' \
+uvicorn sarmiento.main:app --reload
+```
+
+## Conexión 1-click
+
+En cada equipo que usarás como visor, abrí **Conexión 1-click** en el panel y ejecutá una vez el instalador de protocolo. Desde entonces, **Conectar** abre RustDesk mediante `rustdesk --connect <ID>`. En Android/iOS se usa el cliente RustDesk configurado con el mismo servidor y clave; si el sistema no reconoce el protocolo, el panel muestra el ID para copiarlo.
+
+## Operación
+
+```bash
+make logs
+make ps
+make backup
+./ops/restore.sh backups/20260712T120000Z
+```
+
+Consultá:
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+- [`docs/SECURITY.md`](docs/SECURITY.md)
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
+- [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md)
+
+## Versiones fijadas
+
+- RustDesk client: `1.4.9` en los instaladores.
+- RustDesk server OSS: `1.1.15`.
+- PostgreSQL: `16.4-alpine`.
+- Python: `3.12`.
+
+Las versiones se actualizan deliberadamente mediante PR, pruebas y aceptación en hardware. No se usa `latest` en producción.
+
+## Licencias
+
+El código propio de Sarmiento se publica bajo MIT. RustDesk se ejecuta como dependencia independiente y conserva su licencia AGPL-3.0-or-later. Ver [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

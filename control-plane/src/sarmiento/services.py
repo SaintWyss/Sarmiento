@@ -1,0 +1,417 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import desc, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from .config import Settings
+from .domain import DevicePresence, EnrollmentWindow
+from .models import AuditEvent, Device, EnrollmentToken, Owner
+from .security import generate_token, hash_password, hash_token, verify_password
+
+
+class DomainError(Exception):
+    status_code = 400
+
+
+class AuthenticationError(DomainError):
+    status_code = 401
+
+
+class ConflictError(DomainError):
+    status_code = 409
+
+
+class NotFoundError(DomainError):
+    status_code = 404
+
+
+class GoneError(DomainError):
+    status_code = 410
+
+
+def aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def bootstrap_owner(session: Session, settings: Settings) -> Owner:
+    existing = session.scalar(select(Owner).where(Owner.username == settings.owner_username))
+    if existing:
+        return existing
+    owner = Owner(
+        username=settings.owner_username,
+        password_hash=hash_password(settings.owner_password),
+    )
+    session.add(owner)
+    session.commit()
+    session.refresh(owner)
+    return owner
+
+
+def audit(
+    session: Session,
+    *,
+    actor_type: str,
+    actor_id: str | None,
+    action: str,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    source_ip: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> AuditEvent:
+    event = AuditEvent(
+        actor_type=actor_type,
+        actor_id=actor_id,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        source_ip=source_ip,
+        details=details or {},
+    )
+    session.add(event)
+    return event
+
+
+
+def change_owner_password(
+    session: Session,
+    *,
+    owner: Owner,
+    current_password: str,
+    new_password: str,
+    source_ip: str | None,
+) -> None:
+    if not verify_password(current_password, owner.password_hash):
+        raise AuthenticationError("Current password is incorrect")
+    if verify_password(new_password, owner.password_hash):
+        raise ConflictError("New password must be different")
+    owner.password_hash = hash_password(new_password)
+    owner.session_version += 1
+    audit(
+        session,
+        actor_type="owner",
+        actor_id=owner.id,
+        action="auth.password_changed",
+        target_type="owner",
+        target_id=owner.id,
+        source_ip=source_ip,
+    )
+    session.commit()
+
+
+def create_enrollment_token(
+    session: Session,
+    *,
+    owner: Owner,
+    settings: Settings,
+    label: str,
+    ttl_minutes: int | None,
+    source_ip: str | None,
+    now: datetime | None = None,
+) -> tuple[EnrollmentToken, str]:
+    moment = now or datetime.now(UTC)
+    raw = generate_token("set")
+    record = EnrollmentToken(
+        token_hash=hash_token(raw, settings.effective_token_pepper),
+        label=label,
+        created_by=owner.id,
+        created_at=moment,
+        expires_at=moment + timedelta(minutes=ttl_minutes or settings.enrollment_ttl_minutes),
+    )
+    session.add(record)
+    session.flush()
+    audit(
+        session,
+        actor_type="owner",
+        actor_id=owner.id,
+        action="enrollment_token.created",
+        target_type="enrollment_token",
+        target_id=record.id,
+        source_ip=source_ip,
+        details={"label": label, "expires_at": record.expires_at.isoformat()},
+    )
+    session.commit()
+    session.refresh(record)
+    return record, raw
+
+
+def enrollment_status(token: EnrollmentToken, now: datetime) -> str:
+    if token.revoked_at:
+        return "revoked"
+    if token.used_at:
+        return "used"
+    if aware(token.expires_at) <= now:
+        return "expired"
+    return "active"
+
+
+def revoke_enrollment_token(
+    session: Session,
+    *,
+    token_id: str,
+    owner: Owner,
+    source_ip: str | None,
+    now: datetime | None = None,
+) -> EnrollmentToken:
+    record = session.get(EnrollmentToken, token_id)
+    if not record:
+        raise NotFoundError("Enrollment token not found")
+    if record.used_at:
+        raise ConflictError("Used enrollment tokens cannot be revoked")
+    if not record.revoked_at:
+        record.revoked_at = now or datetime.now(UTC)
+        audit(
+            session,
+            actor_type="owner",
+            actor_id=owner.id,
+            action="enrollment_token.revoked",
+            target_type="enrollment_token",
+            target_id=record.id,
+            source_ip=source_ip,
+        )
+        session.commit()
+        session.refresh(record)
+    return record
+
+
+def enroll_device(
+    session: Session,
+    *,
+    settings: Settings,
+    payload: Any,
+    source_ip: str | None,
+    now: datetime | None = None,
+) -> tuple[Device, str]:
+    moment = now or datetime.now(UTC)
+    token_digest = hash_token(payload.enrollment_token, settings.effective_token_pepper)
+    enrollment = session.scalar(
+        select(EnrollmentToken).where(EnrollmentToken.token_hash == token_digest)
+    )
+    if not enrollment:
+        raise AuthenticationError("Invalid enrollment token")
+    window = EnrollmentWindow(
+        expires_at=aware(enrollment.expires_at),
+        used_at=aware(enrollment.used_at),
+        revoked_at=aware(enrollment.revoked_at),
+    )
+    if not window.is_valid(moment):
+        raise GoneError("Enrollment token is expired, used, or revoked")
+
+    existing = session.scalar(select(Device).where(Device.rustdesk_id == payload.rustdesk_id))
+    if existing and existing.revoked_at is None:
+        raise ConflictError("This RustDesk ID is already enrolled")
+
+    raw_agent_token = generate_token("sat")
+    digest = hash_token(raw_agent_token, settings.effective_token_pepper)
+    if existing:
+        device = existing
+        device.alias = payload.alias
+        device.hostname = payload.hostname
+        device.platform = payload.platform
+        device.architecture = payload.architecture
+        device.agent_version = payload.agent_version
+        device.rustdesk_version = payload.rustdesk_version
+        device.metadata_json = payload.metadata
+        device.token_hash = digest
+        device.revoked_at = None
+        device.last_seen = moment
+        device.last_ip = source_ip
+    else:
+        device = Device(
+            rustdesk_id=payload.rustdesk_id,
+            alias=payload.alias,
+            hostname=payload.hostname,
+            platform=payload.platform,
+            architecture=payload.architecture,
+            agent_version=payload.agent_version,
+            rustdesk_version=payload.rustdesk_version,
+            metadata_json=payload.metadata,
+            token_hash=digest,
+            last_seen=moment,
+            last_ip=source_ip,
+        )
+        session.add(device)
+
+    enrollment.used_at = moment
+    try:
+        session.flush()
+    except IntegrityError as exc:
+        session.rollback()
+        raise ConflictError("Device enrollment conflict") from exc
+
+    audit(
+        session,
+        actor_type="agent",
+        actor_id=device.id,
+        action="device.enrolled",
+        target_type="device",
+        target_id=device.id,
+        source_ip=source_ip,
+        details={"rustdesk_id": device.rustdesk_id, "platform": device.platform},
+    )
+    session.commit()
+    session.refresh(device)
+    return device, raw_agent_token
+
+
+def authenticate_agent(session: Session, raw_token: str, settings: Settings) -> Device:
+    digest = hash_token(raw_token, settings.effective_token_pepper)
+    device = session.scalar(select(Device).where(Device.token_hash == digest))
+    if not device or device.revoked_at is not None:
+        raise AuthenticationError("Invalid or revoked agent token")
+    return device
+
+
+def record_heartbeat(
+    session: Session,
+    *,
+    device: Device,
+    payload: Any,
+    source_ip: str | None,
+    now: datetime | None = None,
+) -> Device:
+    if payload.rustdesk_id != device.rustdesk_id:
+        raise ConflictError("Heartbeat RustDesk ID does not match the enrolled device")
+    moment = now or datetime.now(UTC)
+    device.hostname = payload.hostname
+    device.platform = payload.platform
+    device.architecture = payload.architecture
+    device.agent_version = payload.agent_version
+    device.rustdesk_version = payload.rustdesk_version
+    device.metadata_json = payload.metadata
+    device.last_ip = source_ip
+    device.last_seen = moment
+    session.commit()
+    session.refresh(device)
+    return device
+
+
+def device_to_view(device: Device, settings: Settings, now: datetime | None = None) -> dict[str, Any]:
+    moment = now or datetime.now(UTC)
+    online = DevicePresence(
+        last_seen=aware(device.last_seen), revoked_at=aware(device.revoked_at)
+    ).is_online(moment, settings.presence_threshold_seconds)
+    return {
+        "id": device.id,
+        "rustdesk_id": device.rustdesk_id,
+        "alias": device.alias,
+        "hostname": device.hostname,
+        "platform": device.platform,
+        "architecture": device.architecture,
+        "agent_version": device.agent_version,
+        "rustdesk_version": device.rustdesk_version,
+        "tags": device.tags or [],
+        "metadata": device.metadata_json or {},
+        "last_ip": device.last_ip,
+        "last_seen": aware(device.last_seen),
+        "created_at": aware(device.created_at),
+        "updated_at": aware(device.updated_at),
+        "revoked_at": aware(device.revoked_at),
+        "online": online,
+        "connect_uri": f"sarmiento://connect/{device.rustdesk_id}",
+    }
+
+
+def list_devices(session: Session) -> list[Device]:
+    return list(session.scalars(select(Device).order_by(Device.alias.asc())).all())
+
+
+def get_device(session: Session, device_id: str) -> Device:
+    device = session.get(Device, device_id)
+    if not device:
+        raise NotFoundError("Device not found")
+    return device
+
+
+def update_device(
+    session: Session,
+    *,
+    device: Device,
+    alias: str | None,
+    tags: list[str] | None,
+    owner: Owner,
+    source_ip: str | None,
+) -> Device:
+    changed: dict[str, Any] = {}
+    if alias is not None and alias != device.alias:
+        changed["alias"] = {"from": device.alias, "to": alias}
+        device.alias = alias.strip()
+    if tags is not None and tags != (device.tags or []):
+        changed["tags"] = {"from": device.tags or [], "to": tags}
+        device.tags = tags
+    if changed:
+        audit(
+            session,
+            actor_type="owner",
+            actor_id=owner.id,
+            action="device.updated",
+            target_type="device",
+            target_id=device.id,
+            source_ip=source_ip,
+            details=changed,
+        )
+        session.commit()
+        session.refresh(device)
+    return device
+
+
+def revoke_device(
+    session: Session,
+    *,
+    device: Device,
+    owner: Owner,
+    source_ip: str | None,
+    now: datetime | None = None,
+) -> Device:
+    if device.revoked_at is None:
+        device.revoked_at = now or datetime.now(UTC)
+        audit(
+            session,
+            actor_type="owner",
+            actor_id=owner.id,
+            action="device.revoked",
+            target_type="device",
+            target_id=device.id,
+            source_ip=source_ip,
+        )
+        session.commit()
+        session.refresh(device)
+    return device
+
+
+def rotate_agent_token(
+    session: Session,
+    *,
+    device: Device,
+    settings: Settings,
+    owner: Owner,
+    source_ip: str | None,
+) -> str:
+    if device.revoked_at is not None:
+        raise ConflictError("Cannot rotate credentials for a revoked device")
+    raw = generate_token("sat")
+    device.token_hash = hash_token(raw, settings.effective_token_pepper)
+    audit(
+        session,
+        actor_type="owner",
+        actor_id=owner.id,
+        action="device.credential_rotated",
+        target_type="device",
+        target_id=device.id,
+        source_ip=source_ip,
+    )
+    session.commit()
+    return raw
+
+
+def list_audit_events(session: Session, limit: int) -> list[AuditEvent]:
+    return list(
+        session.scalars(select(AuditEvent).order_by(desc(AuditEvent.created_at)).limit(limit)).all()
+    )
