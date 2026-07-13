@@ -10,9 +10,17 @@ function Install-SarmientoAgent {
   )
   $ErrorActionPreference='Stop'
   $RustDeskVersion='1.4.9'
+  $AgentVersion='1.1.0'
   $principal=New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
   if(!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){ throw 'Run PowerShell as Administrator.' }
-  $Url=$Url.TrimEnd('/')
+
+  $parsedUrl=$null
+  if(![Uri]::TryCreate($Url,[UriKind]::Absolute,[ref]$parsedUrl)){ throw 'Sarmiento URL must be absolute.' }
+  if($parsedUrl.Scheme -notin @('http','https')){ throw 'Sarmiento URL must use HTTP(S).' }
+  if($parsedUrl.UserInfo -or $parsedUrl.Fragment){ throw 'Sarmiento URL must not contain credentials or a fragment.' }
+  if($parsedUrl.Scheme -eq 'http' -and !$parsedUrl.IsLoopback){ throw 'Plain HTTP is allowed only for loopback.' }
+  $Url=$parsedUrl.AbsoluteUri.TrimEnd('/')
+
   $base="$env:ProgramData\Sarmiento"
   New-Item -ItemType Directory -Force $base | Out-Null
   & icacls.exe $base /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
@@ -53,7 +61,7 @@ function Install-SarmientoAgent {
   $rdVersion=(& $rustdesk --version | Select-Object -First 1)
   $enrollBody=@{
     enrollment_token=$Token; rustdesk_id=$RustDeskId; alias=$Alias; hostname=$env:COMPUTERNAME
-    platform='Windows'; architecture=$env:PROCESSOR_ARCHITECTURE; agent_version='1.0.0'
+    platform='Windows'; architecture=$env:PROCESSOR_ARCHITECTURE; agent_version=$AgentVersion
     rustdesk_version=if($rdVersion){$rdVersion}else{'unknown'}
     metadata=@{ os_version=[Environment]::OSVersion.VersionString; user_domain=$env:USERDOMAIN }
   } | ConvertTo-Json -Depth 6

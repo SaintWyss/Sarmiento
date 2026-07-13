@@ -10,12 +10,33 @@ from starlette.responses import JSONResponse
 
 
 class SlidingWindowRateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, *, default_per_minute: int, login_per_minute: int) -> None:
+    def __init__(
+        self,
+        app,
+        *,
+        default_per_minute: int,
+        login_per_minute: int,
+        max_buckets: int = 10000,
+    ) -> None:
         super().__init__(app)
         self.default_limit = default_per_minute
         self.login_limit = login_per_minute
+        self.max_buckets = max_buckets
         self._hits: dict[str, deque[float]] = defaultdict(deque)
         self._lock = threading.Lock()
+        self._requests = 0
+
+    def _prune(self, now: float) -> None:
+        cutoff = now - 60
+        for key in list(self._hits):
+            queue = self._hits[key]
+            while queue and queue[0] <= cutoff:
+                queue.popleft()
+            if not queue:
+                self._hits.pop(key, None)
+        if len(self._hits) >= self.max_buckets:
+            oldest = min(self._hits, key=lambda item: self._hits[item][-1])
+            self._hits.pop(oldest, None)
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -27,6 +48,9 @@ class SlidingWindowRateLimitMiddleware(BaseHTTPMiddleware):
         key = f"{client}:{bucket}"
         now = time.monotonic()
         with self._lock:
+            self._requests += 1
+            if self._requests % 256 == 0 or key not in self._hits:
+                self._prune(now)
             queue = self._hits[key]
             while queue and queue[0] <= now - 60:
                 queue.popleft()

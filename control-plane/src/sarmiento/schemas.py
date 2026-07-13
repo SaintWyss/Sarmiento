@@ -1,14 +1,38 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+MAX_METADATA_BYTES = 16 * 1024
+MAX_METADATA_KEYS = 64
+
+
+def _validate_metadata(value: dict[str, Any]) -> dict[str, Any]:
+    if len(value) > MAX_METADATA_KEYS:
+        raise ValueError(f"metadata may contain at most {MAX_METADATA_KEYS} top-level keys")
+    try:
+        encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("metadata must be JSON serializable") from exc
+    if len(encoded) > MAX_METADATA_BYTES:
+        raise ValueError(f"metadata must not exceed {MAX_METADATA_BYTES} bytes")
+    return value
+
+
+def _strip_nonempty(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("value must not be blank")
+    return normalized
+
 
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=80)
     password: str = Field(min_length=1, max_length=512)
+    verification_code: str | None = Field(default=None, max_length=64)
 
 
 class PasswordChangeRequest(BaseModel):
@@ -19,6 +43,26 @@ class PasswordChangeRequest(BaseModel):
 class OwnerView(BaseModel):
     id: str
     username: str
+    mfa_enabled: bool = False
+
+
+class MfaSetupResponse(BaseModel):
+    secret: str
+    provisioning_uri: str
+
+
+class MfaEnableRequest(BaseModel):
+    secret: str = Field(min_length=16, max_length=128)
+    code: str = Field(min_length=6, max_length=64)
+
+
+class MfaEnableResponse(BaseModel):
+    recovery_codes: list[str]
+
+
+class MfaDisableRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=512)
+    code: str = Field(min_length=6, max_length=64)
 
 
 class EnrollmentTokenCreate(BaseModel):
@@ -56,10 +100,20 @@ class AgentEnrollRequest(BaseModel):
     rustdesk_version: str = Field(default="unknown", max_length=40)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("alias", "hostname", "platform", "architecture")
+    @field_validator("alias")
+    @classmethod
+    def strip_alias(cls, value: str) -> str:
+        return _strip_nonempty(value)
+
+    @field_validator("hostname", "platform", "architecture")
     @classmethod
     def strip_text(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_metadata(value)
 
 
 class AgentEnrollResponse(BaseModel):
@@ -71,13 +125,18 @@ class AgentEnrollResponse(BaseModel):
 
 
 class HeartbeatRequest(BaseModel):
-    rustdesk_id: str = Field(min_length=3, max_length=64)
+    rustdesk_id: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     hostname: str = Field(default="", max_length=255)
     platform: str = Field(default="unknown", max_length=80)
     architecture: str = Field(default="unknown", max_length=80)
     agent_version: str = Field(default="unknown", max_length=40)
     rustdesk_version: str = Field(default="unknown", max_length=40)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_metadata(value)
 
 
 class HeartbeatResponse(BaseModel):
@@ -94,6 +153,11 @@ class AgentTokenRotationResponse(BaseModel):
 class DeviceUpdate(BaseModel):
     alias: str | None = Field(default=None, min_length=1, max_length=120)
     tags: list[str] | None = Field(default=None, max_length=20)
+
+    @field_validator("alias")
+    @classmethod
+    def normalize_alias(cls, value: str | None) -> str | None:
+        return None if value is None else _strip_nonempty(value)
 
     @field_validator("tags")
     @classmethod

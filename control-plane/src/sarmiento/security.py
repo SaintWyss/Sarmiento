@@ -4,15 +4,22 @@ import base64
 import hashlib
 import hmac
 import secrets
+import struct
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 
 import jwt
+from cryptography.fernet import Fernet, InvalidToken
 
 PASSWORD_SCHEME = "scrypt"
 SCRYPT_N = 2**14
 SCRYPT_R = 8
 SCRYPT_P = 1
+SESSION_ISSUER = "sarmiento"
+SESSION_AUDIENCE = "sarmiento-control-plane"
+TOTP_PERIOD_SECONDS = 30
+TOTP_DIGITS = 6
 
 
 def _b64(data: bytes) -> str:
@@ -51,9 +58,6 @@ def verify_password(password: str, encoded: str) -> bool:
         return False
 
 
-# Always perform one scrypt verification on failed logins, even when the owner
-# does not exist. This keeps username enumeration from gaining a cheap timing
-# signal. The value is generated once per process and can never authenticate.
 DUMMY_PASSWORD_HASH = hash_password("sarmiento-dummy-password-never-valid")
 
 
@@ -83,11 +87,14 @@ def issue_session_token(
 ) -> str:
     issued_at = now or datetime.now(UTC)
     payload = {
+        "iss": SESSION_ISSUER,
+        "aud": SESSION_AUDIENCE,
         "sub": user_id,
         "username": username,
         "type": "session",
         "session_version": session_version,
         "iat": issued_at,
+        "nbf": issued_at,
         "exp": issued_at + timedelta(minutes=ttl_minutes),
         "jti": secrets.token_hex(16),
     }
@@ -95,7 +102,26 @@ def issue_session_token(
 
 
 def decode_session_token(token: str, secret: str) -> dict[str, Any]:
-    payload = jwt.decode(token, secret, algorithms=["HS256"])
+    payload = jwt.decode(
+        token,
+        secret,
+        algorithms=["HS256"],
+        audience=SESSION_AUDIENCE,
+        issuer=SESSION_ISSUER,
+        options={
+            "require": [
+                "iss",
+                "aud",
+                "sub",
+                "type",
+                "session_version",
+                "iat",
+                "nbf",
+                "exp",
+                "jti",
+            ]
+        },
+    )
     if payload.get("type") != "session" or not payload.get("sub"):
         raise jwt.InvalidTokenError("invalid session token")
     return payload
@@ -103,3 +129,85 @@ def decode_session_token(token: str, secret: str) -> dict[str, Any]:
 
 def generate_csrf_token() -> str:
     return secrets.token_urlsafe(24)
+
+
+def generate_totp_secret() -> str:
+    return base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+
+
+def _decode_totp_secret(secret: str) -> bytes:
+    normalized = secret.strip().replace(" ", "").upper()
+    return base64.b32decode(normalized + "=" * (-len(normalized) % 8), casefold=True)
+
+
+def totp_code(secret: str, step: int, digits: int = TOTP_DIGITS) -> str:
+    digest = hmac.new(
+        _decode_totp_secret(secret),
+        struct.pack(">Q", step),
+        hashlib.sha1,
+    ).digest()  # nosec B324 - required by RFC 6238 interoperability
+    offset = digest[-1] & 0x0F
+    value = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return str(value % (10**digits)).zfill(digits)
+
+
+def verify_totp(
+    secret: str,
+    code: str,
+    *,
+    now: datetime | None = None,
+    window: int = 1,
+    last_used_step: int | None = None,
+) -> int | None:
+    candidate = code.strip().replace(" ", "")
+    if len(candidate) != TOTP_DIGITS or not candidate.isdigit():
+        return None
+    moment = now or datetime.now(UTC)
+    current_step = int(moment.timestamp()) // TOTP_PERIOD_SECONDS
+    for delta in range(-window, window + 1):
+        step = current_step + delta
+        if last_used_step is not None and step <= last_used_step:
+            continue
+        if hmac.compare_digest(totp_code(secret, step), candidate):
+            return step
+    return None
+
+
+def totp_provisioning_uri(secret: str, account: str, issuer: str = "Sarmiento") -> str:
+    label = quote(f"{issuer}:{account}")
+    return (
+        f"otpauth://totp/{label}?secret={quote(secret)}&issuer={quote(issuer)}"
+        f"&algorithm=SHA1&digits={TOTP_DIGITS}&period={TOTP_PERIOD_SECONDS}"
+    )
+
+
+def _fernet(pepper: str) -> Fernet:
+    key = base64.urlsafe_b64encode(hashlib.sha256(pepper.encode("utf-8")).digest())
+    return Fernet(key)
+
+
+def encrypt_secret(secret: str, pepper: str) -> str:
+    return _fernet(pepper).encrypt(secret.encode("utf-8")).decode("ascii")
+
+
+def decrypt_secret(encrypted: str, pepper: str) -> str:
+    try:
+        return _fernet(pepper).decrypt(encrypted.encode("ascii")).decode("utf-8")
+    except (InvalidToken, UnicodeDecodeError) as exc:
+        raise ValueError("Unable to decrypt MFA secret") from exc
+
+
+def generate_recovery_codes(count: int = 10) -> list[str]:
+    codes: list[str] = []
+    for _ in range(count):
+        raw = secrets.token_hex(6).upper()
+        codes.append(f"{raw[:4]}-{raw[4:8]}-{raw[8:]}")
+    return codes
+
+
+def normalize_recovery_code(code: str) -> str:
+    return "".join(character for character in code.upper() if character.isalnum())
+
+
+def hash_recovery_code(code: str, pepper: str) -> str:
+    return hash_token(f"recovery:{normalize_recovery_code(code)}", pepper)

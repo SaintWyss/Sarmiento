@@ -4,53 +4,64 @@ Sarmiento es una plataforma personal de control remoto para administrar tus prop
 
 ## Estado
 
-**Versión 1.0 implementada.** El repositorio contiene backend, panel web/PWA, agentes Linux, Windows y macOS, infraestructura Docker, HTTPS, base de datos, backups, pruebas y CI.
+**Versión 1.1 implementada.** El repositorio contiene backend, panel web/PWA, agentes Linux, Windows y macOS, infraestructura Docker, HTTPS, PostgreSQL, backups, pruebas, escaneo de seguridad y CI.
 
-La validación automática cubre el control-plane y los agentes. La última aceptación siempre debe ejecutarse con las máquinas reales porque permisos de captura, Wayland, firewalls, NAT y permisos del protocolo local `sarmiento://` dependen del sistema operativo.
+La validación automática cubre el control-plane, migraciones, scripts, contenedores y agentes. La aceptación final de captura/control siempre debe ejecutarse con las máquinas reales porque permisos de pantalla, Wayland, firewalls, NAT y el protocolo local `sarmiento://` dependen del sistema operativo.
 
 ## Qué incluye
 
 - RustDesk Server OSS self-hosted: `hbbs` + `hbbr`.
 - Control-plane FastAPI + PostgreSQL.
-- Inicio de sesión del propietario con cookie HttpOnly, CSRF y rate limiting.
-- Tokens de enrolamiento de uso único y vencimiento configurable.
-- Credenciales independientes por agente, almacenadas únicamente como hash.
-- Heartbeat cada 30 segundos, estado online/offline e inventario técnico.
+- Login del propietario con scrypt, cookie HttpOnly, CSRF, rate limiting y lockout persistente.
+- **MFA TOTP** con códigos de recuperación de un solo uso.
+- JWT con emisor, audiencia, expiración, `nbf`, `jti` y versionado de sesión.
+- Tokens de enrolamiento de uso único, TTL y consumo concurrente seguro.
+- Credenciales independientes por agente, almacenadas únicamente como HMAC.
+- Rotación automática de credenciales en dos fases, tolerante a reintentos y cortes de red.
+- Heartbeat cada 30 segundos, estado online/offline e inventario técnico acotado.
 - Panel responsive instalable como PWA.
-- Conexión 1-click mediante el protocolo local `sarmiento://` y copia del ID como fallback.
-- Administración de alias, etiquetas, revocación y rotación automática de credenciales durante el heartbeat.
-- Auditoría de accesos y cambios administrativos.
+- Conexión 1-click mediante `sarmiento://` y copia de ID como fallback.
+- Administración de alias, etiquetas, revocación y auditoría.
 - Instaladores para Linux/systemd, Windows/Scheduled Tasks y macOS/launchd.
-- Lanzador 1-click propio `sarmiento://` para Linux, Windows y macOS.
-- HTTPS automático con Caddy.
-- Migraciones Alembic, backups, restore, smoke tests y GitHub Actions.
+- HTTPS automático con Caddy y headers CSP/HSTS.
+- Límites de body HTTP y metadata para reducir abuso de memoria/DB.
+- Migraciones Alembic, backups, restore, smoke tests, GitHub Actions, Bandit y `pip-audit`.
 
 ## Arquitectura
 
-```text
-Browser / PWA
-      │ HTTPS
-      ▼
-   Caddy ─────► FastAPI control-plane ─────► PostgreSQL
-                    ▲       ▲
-                    │       └── agente Linux / Windows / macOS (enroll + heartbeat)
-                    │
-                    └── inventario, auth y auditoría
-
-RustDesk viewer ────── E2E / P2P o relay ────── RustDesk host
-                  hbbs rendezvous + hbbr relay
+```mermaid
+flowchart LR
+    Browser[Browser / PWA] -->|HTTPS| Caddy
+    Agent[Agent Linux / Windows / macOS] -->|Enroll + heartbeat HTTPS| Caddy
+    Caddy --> API[FastAPI control-plane]
+    API --> DB[(PostgreSQL)]
+    Viewer[RustDesk viewer] <-->|P2P E2E o relay| Host[RustDesk host]
+    Viewer --> HBBS[hbbs]
+    Host --> HBBS
+    Viewer --> HBBR[hbbr]
+    Host --> HBBR
+    API -. no procesa media/input .- Viewer
 ```
 
 El control-plane **no procesa video ni eventos de entrada** y **no guarda la contraseña permanente de RustDesk**. Esa contraseña se genera/configura en la máquina controlada y se muestra una sola vez durante la instalación.
+
+Documentación técnica:
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): arquitectura, componentes, secuencias, estados y ER.
+- [`docs/UML.md`](docs/UML.md): casos de uso, componentes, despliegue y actividades.
+- [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md): STRIDE, trust boundaries y escenarios de abuso.
+- [`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md): hallazgos, correcciones y riesgos residuales.
+- [`docs/SECURITY.md`](docs/SECURITY.md): controles y respuesta a incidentes.
+- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), [`docs/OPERATIONS.md`](docs/OPERATIONS.md) y [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md).
 
 ## Requisitos de despliegue
 
 - Servidor Linux con Docker Engine y Docker Compose.
 - IP pública o VPS accesible desde las máquinas viewer y host.
-- Un dominio para el panel, por ejemplo `control.example.com`.
-- Un hostname o IP para RustDesk, por ejemplo `desk.example.com`.
-- Puertos abiertos:
-  - `80/tcp`, `443/tcp`, `443/udp` para el panel y HTTPS.
+- Dominio para el panel, por ejemplo `control.example.com`.
+- Hostname o IP para RustDesk, por ejemplo `desk.example.com`.
+- Puertos:
+  - `80/tcp`, `443/tcp`, `443/udp` para panel y HTTPS.
   - `21115/tcp`.
   - `21116/tcp` y `21116/udp`.
   - `21117/tcp`.
@@ -73,7 +84,7 @@ make smoke URL=https://control.example.com
 
 El generador crea `infra/.env` con permisos `0600`, contraseña de PostgreSQL, secreto de sesión y pepper independientes. Si no ingresás una contraseña de propietario de forma interactiva, genera una y la muestra una sola vez.
 
-Abrí el panel, iniciá sesión y pulsá **Añadir equipo**.
+Después del primer login, abrí **Seguridad** y activá MFA antes de exponer el panel de forma permanente. Una vez creado el owner y cambiada su contraseña desde el panel, `SARMIENTO_OWNER_PASSWORD` puede quedar vacío en `infra/.env`.
 
 ## Enrolar una máquina
 
@@ -93,7 +104,7 @@ iwr https://control.example.com/agent/install-windows.ps1 -UseBasicParsing | iex
 Install-SarmientoAgent -Url 'https://control.example.com' -Token 'set_...'
 ```
 
-macOS, con RustDesk ya instalado en `/Applications`:
+macOS, con RustDesk instalado en `/Applications`:
 
 ```bash
 curl -fsSL https://control.example.com/agent/install-macos.sh | sudo bash -s -- \
@@ -102,19 +113,19 @@ curl -fsSL https://control.example.com/agent/install-macos.sh | sudo bash -s -- 
 
 Los instaladores:
 
-1. Instalan RustDesk 1.4.9 en Linux/Windows cuando no está presente; en macOS verifican la aplicación instalada.
-2. Configuran el ID Server y la clave pública del servidor.
-3. Generan una contraseña permanente aleatoria de RustDesk.
-4. Obtienen el ID mediante `rustdesk --get-id`.
-5. Enrolan el equipo en Sarmiento.
-6. Instalan el heartbeat persistente.
-7. Muestran la contraseña permanente para guardarla en un gestor de contraseñas.
+1. Instalan o verifican RustDesk 1.4.9.
+2. Configuran ID Server y clave pública.
+3. Generan una contraseña permanente aleatoria.
+4. Obtienen el RustDesk ID.
+5. Enrolan el equipo.
+6. Instalan heartbeat persistente.
+7. Muestran la contraseña para guardarla en un gestor de contraseñas.
 
 ## Uso desde celular
 
-1. Instalá el cliente oficial de RustDesk en el celular.
-2. Configuralo con el mismo ID Server y clave pública que muestra Sarmiento.
-3. Abrí Sarmiento en el navegador o instalalo como PWA.
+1. Instalá el cliente oficial de RustDesk.
+2. Configuralo con el mismo ID Server y clave pública.
+3. Abrí Sarmiento o instalalo como PWA.
 4. Pulsá **Conectar**. Si el sistema no abre el deep link, copiá el ID y pegalo en RustDesk.
 
 ## Desarrollo y validación
@@ -128,21 +139,18 @@ make test
 make check
 ```
 
-Prueba local del backend:
+Prueba local:
 
 ```bash
 cd control-plane
 SARMIENTO_OWNER_PASSWORD='a-secure-local-password' \
 SARMIENTO_SESSION_SECRET='replace-with-at-least-32-random-bytes' \
+SARMIENTO_TOKEN_PEPPER='a-different-long-random-secret' \
 SARMIENTO_STATIC_DIR='../front' \
 SARMIENTO_AGENT_DIR='../agent' \
 SARMIENTO_VIEWER_DIR='../viewer' \
 uvicorn sarmiento.main:app --reload
 ```
-
-## Conexión 1-click
-
-En cada equipo que usarás como visor, abrí **Conexión 1-click** en el panel y ejecutá una vez el instalador de protocolo. Desde entonces, **Conectar** abre RustDesk mediante `rustdesk --connect <ID>`. En Android/iOS se usa el cliente RustDesk configurado con el mismo servidor y clave; si el sistema no reconoce el protocolo, el panel muestra el ID para copiarlo.
 
 ## Operación
 
@@ -153,22 +161,15 @@ make backup
 ./ops/restore.sh backups/20260712T120000Z
 ```
 
-Consultá:
-
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
-- [`docs/SECURITY.md`](docs/SECURITY.md)
-- [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
-- [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md)
-
 ## Versiones fijadas
 
-- RustDesk client: `1.4.9` en los instaladores.
+- Sarmiento control-plane: `1.1.0`.
+- RustDesk client: `1.4.9` en instaladores.
 - RustDesk server OSS: `1.1.15`.
 - PostgreSQL: `16.4-alpine`.
 - Python: `3.12`.
 
-Las versiones se actualizan deliberadamente mediante PR, pruebas y aceptación en hardware. No se usa `latest` en producción.
+No se usa `latest` en producción. Las actualizaciones se aplican por PR, CI y aceptación en hardware. Para despliegues de mayor criticidad, además se deben fijar imágenes por digest `sha256`.
 
 ## Licencias
 

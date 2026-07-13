@@ -1,0 +1,58 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  python-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: control-plane/pyproject.toml
+      - name: Install scanners
+        run: python -m pip install --quiet pip-audit bandit
+      - name: Generate dependency audit
+        shell: bash
+        run: |
+          set +e
+          pip-audit ./control-plane --format json --output pip-audit.json
+          echo $? > pip-audit.status
+          exit 0
+      - name: Upload dependency audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-report
+          path: pip-audit.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Enforce dependency audit
+        run: test "$(cat pip-audit.status)" = "0"
+      - name: Generate static security report
+        shell: bash
+        run: |
+          set +e
+          bandit -q -r control-plane/src agent/sarmiento_agent.py ops/init_env.py -ll -f json -o bandit.json
+          echo $? > bandit.status
+          exit 0
+      - name: Upload static security report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Enforce static security scan
+        run: test "$(cat bandit.status)" = "0"

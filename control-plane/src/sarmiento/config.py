@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     rustdesk_key_file: str = ""
     rate_limit_per_minute: int = Field(default=120, ge=10, le=10000)
     login_rate_limit_per_minute: int = Field(default=10, ge=1, le=100)
+    max_rate_limit_buckets: int = Field(default=10000, ge=100, le=1000000)
+    max_request_body_bytes: int = Field(default=65536, ge=16384, le=1048576)
+    login_lockout_attempts: int = Field(default=5, ge=3, le=20)
+    login_lockout_minutes: int = Field(default=15, ge=1, le=1440)
     static_dir: str = "../front"
     agent_dir: str = "../agent"
     viewer_dir: str = "../viewer"
@@ -53,6 +57,14 @@ class Settings(BaseSettings):
     @property
     def effective_token_pepper(self) -> str:
         return self.token_pepper or self.session_secret
+
+    @property
+    def session_cookie_name(self) -> str:
+        return "__Host-sarmiento_session" if self.cookie_secure else "sarmiento_session"
+
+    @property
+    def csrf_cookie_name(self) -> str:
+        return "__Host-sarmiento_csrf" if self.cookie_secure else "sarmiento_csrf"
 
     @property
     def resolved_rustdesk_key(self) -> str:

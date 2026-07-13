@@ -4,11 +4,19 @@ param(
   [string]$NewToken=''
 )
 $ErrorActionPreference='Stop'
-$AgentVersion='1.0.0'
+$AgentVersion='1.1.0'
 
 function Write-AgentLog([string]$Message){ Write-Host "[sarmiento-agent] $Message" }
 function Read-AgentConfig { if(!(Test-Path $ConfigPath)){ throw "Agent is not enrolled; config missing at $ConfigPath" }; Get-Content $ConfigPath -Raw | ConvertFrom-Json }
 function Write-AgentConfig($Config){ $dir=Split-Path $ConfigPath; New-Item -ItemType Directory -Force $dir | Out-Null; $Config | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $ConfigPath }
+function Assert-SarmientoUrl([string]$Value){
+  $uri=$null
+  if(![Uri]::TryCreate($Value,[UriKind]::Absolute,[ref]$uri)){ throw 'Sarmiento URL must be absolute.' }
+  if($uri.Scheme -notin @('http','https')){ throw 'Sarmiento URL must use HTTP(S).' }
+  if($uri.UserInfo -or $uri.Fragment){ throw 'Sarmiento URL must not contain credentials or a fragment.' }
+  if($uri.Scheme -eq 'http' -and !$uri.IsLoopback){ throw 'Plain HTTP is allowed only for loopback.' }
+  return $uri.AbsoluteUri.TrimEnd('/')
+}
 function Get-RustDeskPath {
   $paths=@("$env:ProgramFiles\RustDesk\rustdesk.exe","${env:ProgramFiles(x86)}\RustDesk\rustdesk.exe")
   foreach($path in $paths){ if($path -and (Test-Path $path)){ return $path } }
@@ -31,11 +39,12 @@ function Get-HeartbeatBody($RustDeskId){
 }
 function Send-Heartbeat {
   $config=Read-AgentConfig
+  $baseUrl=Assert-SarmientoUrl ([string]$config.base_url)
   $headers=@{ Authorization="Bearer $($config.agent_token)" }
   $body=(Get-HeartbeatBody $config.rustdesk_id) | ConvertTo-Json -Depth 6
-  $response=Invoke-RestMethod -Method Post -Uri "$($config.base_url)/api/v1/agents/heartbeat" -Headers $headers -ContentType 'application/json' -Body $body
+  $response=Invoke-RestMethod -Method Post -Uri "$baseUrl/api/v1/agents/heartbeat" -Headers $headers -ContentType 'application/json' -Body $body
   if($response.credential_rotation_required){
-    $rotated=Invoke-RestMethod -Method Post -Uri "$($config.base_url)/api/v1/agents/rotate-token" -Headers $headers -ContentType 'application/json'
+    $rotated=Invoke-RestMethod -Method Post -Uri "$baseUrl/api/v1/agents/rotate-token" -Headers $headers -ContentType 'application/json'
     $config.agent_token=$rotated.agent_token
     Write-AgentConfig $config
     Write-AgentLog 'Agent credential rotated automatically'
