@@ -9,6 +9,61 @@ permissions:
   contents: read
 
 jobs:
+  desktop:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+      - name: Build frontend and application icons
+        working-directory: desktop
+        run: |
+          npm run build
+          npm run icons
+      - name: Test Rust core
+        working-directory: desktop/src-tauri
+        run: cargo test --all-targets
+      - name: Lint Rust core
+        working-directory: desktop/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Build AppImage
+        working-directory: desktop
+        run: npm run desktop:build
+      - name: Verify AppImage
+        run: test -s desktop/src-tauri/target/release/bundle/appimage/Sarmiento_1.0.0_amd64.AppImage
+      - name: Publish Sarmiento Desktop release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view desktop-v1.0.0 >/dev/null 2>&1; then
+            gh release create desktop-v1.0.0 \
+              --target "$GITHUB_SHA" \
+              --title "Sarmiento Desktop 1.0.0" \
+              --notes "Aplicación nativa Linux para KDE/X11 con Deskflow, RustDesk, bandeja, autostart y control-plane Sarmiento."
+          fi
+          gh release upload desktop-v1.0.0 \
+            desktop/src-tauri/target/release/bundle/appimage/Sarmiento_1.0.0_amd64.AppImage \
+            --clobber
+
   backend:
     runs-on: ubuntu-latest
     steps:
@@ -42,7 +97,7 @@ jobs:
           node-version: "22"
       - name: Validate shell and frontend JavaScript
         run: |
-          bash -n agent/install-linux.sh agent/install-macos.sh viewer/install-linux.sh viewer/install-macos.sh viewer/sarmiento-open.sh viewer/sarmiento-workstation.sh viewer/tests/test-viewer.sh control-plane/entrypoint.sh ops/backup.sh ops/restore.sh ops/smoke.sh
+          bash -n agent/install-linux.sh agent/install-macos.sh viewer/install-linux.sh viewer/install-macos.sh viewer/sarmiento-open.sh viewer/sarmiento-workstation.sh viewer/tests/test-viewer.sh desktop/install-linux.sh control-plane/entrypoint.sh ops/backup.sh ops/restore.sh ops/smoke.sh
           node --check front/app.js
           node --check front/sw.js
           bash viewer/tests/test-viewer.sh
