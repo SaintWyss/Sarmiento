@@ -1,77 +1,91 @@
-# Estación de trabajo gráfica
+# Sarmiento Desktop en KDE/X11
 
-Sarmiento puede coordinar Deskflow y RustDesk desde el panel PWA. La interfaz es el punto de
-entrada; el navegador delega las acciones locales mediante el protocolo `sarmiento://`.
+Sarmiento Desktop es una aplicación Linux nativa. Tiene ventana propia, aparece en el menú de
+KDE, puede iniciar con la sesión y permanece disponible en la bandeja del sistema. El panel web
+sigue existiendo para administración móvil o de emergencia, pero no es necesario para el uso
+diario desde la PC.
 
-## Modos
+## Qué controla
 
-### Pantallas físicas
+- **Pantallas físicas:** inicia el servicio Deskflow local para cruzar mouse, teclado y
+  portapapeles entre la PC y la notebook.
+- **Control remoto:** abre RustDesk contra el ID seleccionado y conserva Deskflow activo.
+- **Abrir en monitor:** pausa Deskflow y abre RustDesk para usar la notebook dentro de uno de los
+  monitores del escritorio.
+- **Equipos y seguridad:** inicio de sesión, inventario, presencia, alias, etiquetas, revocación,
+  rotación de agente, enrolamiento, contraseña y MFA desde la misma ventana.
 
-Cada computadora conserva su propia pantalla. Deskflow comparte mouse, teclado y portapapeles.
-El botón **Usar pantallas físicas** ejecuta:
+Sarmiento no captura ni transporta video: RustDesk continúa haciendo esa tarea. Tampoco lee ni
+guarda la contraseña permanente de RustDesk.
 
-```text
-sarmiento://workstation/normal
+## Construcción
+
+En CachyOS/Arch instalá una vez las herramientas de compilación:
+
+```bash
+sudo pacman -S --needed base-devel rust nodejs npm webkit2gtk-4.1 libappindicator-gtk3 librsvg
+cd desktop
+npm ci
+npm run desktop:build
 ```
 
-El companion inicia `deskflow-server.service` en la sesión del usuario. Si no existe, intenta
-`deskflow-client.service`.
+El AppImage queda en `desktop/src-tauri/target/release/bundle/appimage/`. Cada ejecución de CI
+también publica el AppImage como artefacto `Sarmiento-Desktop-Linux-x86_64`.
 
-### Abrir en monitor
+## Instalación local sin sudo
 
-Cada tarjeta online incluye **Abrir en monitor**. Después de confirmar, el panel ejecuta:
-
-```text
-sarmiento://workstation/notebook/<rustdesk-id>
+```bash
+cd desktop
+./install-linux.sh src-tauri/target/release/bundle/appimage/Sarmiento_*.AppImage
 ```
 
-El companion valida el ID, pausa Deskflow y abre RustDesk. La contraseña permanente nunca
-atraviesa el panel ni el control-plane. Para volver al escritorio físico se usa el botón
-**Usar pantallas físicas**.
+El instalador copia el programa a `~/.local/share/sarmiento-desktop/`, crea el acceso del menú KDE
+y registra `sarmiento://`. Luego la operación completa se hace desde la interfaz.
 
-## Instalación o actualización
+Al abrir por primera vez:
 
-Desde **Conexión 1-click**, ejecutá el instalador Linux que muestra el panel. Instala:
+1. Ingresá `https://sarmiento.lan`, el usuario owner y la contraseña vigente.
+2. En **Ajustes**, activá **Iniciar Sarmiento con KDE** si lo querés permanente.
+3. Usá **Abrir en monitor** en la notebook para el modo remoto.
+4. Usá **Usar pantallas físicas** para volver a Deskflow.
 
-- `/opt/sarmiento-viewer/sarmiento-open.sh`: handler del protocolo.
-- `/opt/sarmiento-viewer/sarmiento-workstation.sh`: coordinador local.
-- `sarmiento-viewer.desktop`: asociación de `sarmiento://`.
-- `sarmiento.desktop`: acceso al panel desde KDE.
+Cerrar la ventana la oculta en la bandeja. **Salir** en el menú de la bandeja termina la
+aplicación.
 
-El instalador no instala RustDesk ni configura Deskflow: verifica RustDesk y reutiliza los
-servicios Deskflow existentes. Esto evita modificar la topología del usuario desde el panel.
+## Requisitos locales
+
+- RustDesk accesible como `rustdesk`.
+- Uno de `deskflow-server.service` o `deskflow-client.service` instalado como servicio
+  `systemd --user`.
+- CA interna del control-plane instalada en el trust store del sistema si se usa HTTPS privado.
+- Sesión KDE/X11 con `DISPLAY` y `XAUTHORITY` importados en el user-manager, como en el despliegue
+  existente.
 
 ## Seguridad
 
-- Todos los IDs se validan con una allowlist estricta antes de llegar a un proceso.
-- No se usa `eval` ni se construyen comandos mediante concatenación.
-- El navegador no recibe acceso a systemd ni a un socket HTTP local.
-- El companion se ejecuta como el usuario gráfico y solo controla servicios `systemd --user`.
-- Sarmiento no lee ni persiste la contraseña permanente de RustDesk.
+- La cookie de sesión y CSRF viven en memoria del proceso Rust, no en `localStorage`.
+- Se exige HTTPS salvo en `localhost` para desarrollo.
+- Los IDs RustDesk pasan por una allowlist antes de crear el proceso.
+- No se usa un shell para ejecutar IDs ni se expone una API genérica de comandos al frontend.
+- El CSP de la ventana no permite cargar scripts o contenido remoto.
+- Deskflow se controla solo mediante `systemctl --user` y unidades conocidas.
 
-## Recuperación y rollback
-
-Si RustDesk está abierto y querés recuperar el cruce de cursor, pulsá **Usar pantallas físicas**.
-Si el protocolo local no responde, reinstalá el Viewer desde **Conexión 1-click**.
-
-Para eliminar la integración:
+## Desinstalación y recuperación
 
 ```bash
-sudo rm -rf /opt/sarmiento-viewer
-sudo rm -f /usr/share/applications/sarmiento-viewer.desktop
-sudo rm -f /usr/share/applications/sarmiento.desktop
-update-desktop-database ~/.local/share/applications /usr/share/applications 2>/dev/null || true
+desktop/install-linux.sh --uninstall
 ```
 
-Eliminar el Viewer no desinstala RustDesk, no modifica el agente y no borra la configuración
-de Deskflow.
+Esto elimina únicamente Sarmiento Desktop. No toca RustDesk, Deskflow, el agente, el
+control-plane ni sus credenciales. Si la app se cerrara mientras Deskflow está pausado, podés
+recuperarlo con `systemctl --user start deskflow-server.service` (o `deskflow-client.service`).
 
-## Aceptación manual
+## Aceptación física
 
-1. Abrir Sarmiento desde KDE.
-2. Pulsar **Abrir en monitor** sobre un equipo online.
-3. Confirmar que Deskflow queda pausado y RustDesk abre el ID correcto.
-4. Controlar el equipo en ventana y pantalla completa.
-5. Pulsar **Usar pantallas físicas**.
-6. Confirmar que Deskflow vuelve a estar activo y el cursor cruza entre pantallas.
-7. Reiniciar la sesión y confirmar que el handler `sarmiento://` continúa registrado.
+1. Abrir Sarmiento desde el lanzador de KDE y autenticar.
+2. Confirmar que muestra los dos equipos y el estado de Deskflow.
+3. Pulsar **Abrir en monitor** sobre la notebook y verificar video, teclado y mouse en RustDesk.
+4. Mover la ventana al monitor deseado y activar pantalla completa.
+5. Pulsar **Usar pantallas físicas** y confirmar que el cursor vuelve a cruzar por Deskflow.
+6. Activar autostart, reiniciar sesión y confirmar ventana/bandeja y handler `sarmiento://`.
+
