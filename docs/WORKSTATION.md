@@ -29,8 +29,8 @@ npm ci
 npm run desktop:build
 ```
 
-El AppImage queda en `desktop/src-tauri/target/release/bundle/appimage/`. Cada ejecución de CI
-también publica el AppImage como artefacto `Sarmiento-Desktop-Linux-x86_64`.
+El AppImage queda en `desktop/src-tauri/target/release/bundle/appimage/`. La compilación de
+`main` también lo publica en el Release `desktop-v1.0.0` para descargarlo sin compilar.
 
 ## Instalación local sin sudo
 
@@ -88,4 +88,3 @@ recuperarlo con `systemctl --user start deskflow-server.service` (o `deskflow-cl
 4. Mover la ventana al monitor deseado y activar pantalla completa.
 5. Pulsar **Usar pantallas físicas** y confirmar que el cursor vuelve a cruzar por Deskflow.
 6. Activar autostart, reiniciar sesión y confirmar ventana/bandeja y handler `sarmiento://`.
-
