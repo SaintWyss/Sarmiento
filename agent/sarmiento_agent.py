@@ -19,20 +19,36 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 DEFAULT_CONFIG = Path(
     os.environ.get("SARMIENTO_AGENT_CONFIG", "/etc/sarmiento/agent.json")
 )
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 def log(message: str) -> None:
     print(f"[sarmiento-agent] {message}", flush=True)
 
 
+def validate_service_url(url: str) -> str:
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise RuntimeError("Sarmiento URL must be an absolute HTTP(S) URL")
+    if parsed.username or parsed.password:
+        raise RuntimeError("Sarmiento URL must not contain embedded credentials")
+    if parsed.fragment:
+        raise RuntimeError("Sarmiento URL must not contain a fragment")
+    if parsed.scheme == "http" and parsed.hostname.lower() not in LOOPBACK_HOSTS:
+        raise RuntimeError("Plain HTTP is allowed only for a loopback Sarmiento server")
+    return url
+
+
 def request_json(
     url: str, *, method: str = "GET", body: dict | None = None, token: str | None = None
 ) -> dict:
+    validate_service_url(url)
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Accept": "application/json", "User-Agent": f"SarmientoAgent/{VERSION}"}
     if data is not None:
@@ -42,7 +58,10 @@ def request_json(
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     context = ssl.create_default_context()
     try:
-        with urllib.request.urlopen(request, timeout=20, context=context) as response:
+        # B310 is intentionally suppressed after the strict scheme/host validation above.
+        with urllib.request.urlopen(  # nosec B310
+            request, timeout=20, context=context
+        ) as response:
             payload = response.read().decode("utf-8")
             return json.loads(payload) if payload else {}
     except urllib.error.HTTPError as exc:
@@ -162,7 +181,7 @@ def load_config(path: Path) -> dict[str, Any]:
 
 
 def enroll(args: argparse.Namespace) -> None:
-    base_url = args.url.rstrip("/")
+    base_url = validate_service_url(args.url.rstrip("/"))
     permanent_password = args.password or random_password()
     public = request_json(f"{base_url}/api/v1/config/public")
     configure_rustdesk(
