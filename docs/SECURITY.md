@@ -56,3 +56,7 @@ Restart-ScheduledTask -TaskName SarmientoAgent
 ## Reporte de vulnerabilidades
 
 No publiques credenciales, claves, IP privadas o capturas del panel en un issue público. Revocá primero cualquier secreto expuesto y luego documentá el incidente sin incluir el valor comprometido.
+
+## Rotación de credenciales del agente
+
+El propietario solicita la rotación desde el panel. El agente autenticado recibe la señal en el siguiente heartbeat, intercambia su credencial por una nueva y la persiste localmente con permisos restringidos. La credencial anterior deja de ser válida únicamente después de que el agente recibe y guarda la nueva.

@@ -31,7 +31,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        create_schema(engine)
+        if app_settings.environment.lower() != "production":
+            create_schema(engine)
         with session_factory() as session:
             bootstrap_owner(session, app_settings)
         yield

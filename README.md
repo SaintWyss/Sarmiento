@@ -18,7 +18,7 @@ La validación automática cubre el control-plane y los agentes. La última acep
 - Heartbeat cada 30 segundos, estado online/offline e inventario técnico.
 - Panel responsive instalable como PWA.
 - Conexión 1-click mediante el protocolo local `sarmiento://` y copia del ID como fallback.
-- Administración de alias, etiquetas, revocación y rotación de credenciales.
+- Administración de alias, etiquetas, revocación y rotación automática de credenciales durante el heartbeat.
 - Auditoría de accesos y cambios administrativos.
 - Instaladores para Linux/systemd, Windows/Scheduled Tasks y macOS/launchd.
 - Lanzador 1-click propio `sarmiento://` para Linux, Windows y macOS.

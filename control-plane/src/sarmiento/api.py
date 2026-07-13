@@ -16,6 +16,7 @@ from .models import Device, EnrollmentToken, Owner
 from .schemas import (
     AgentEnrollRequest,
     AgentEnrollResponse,
+    AgentTokenRotationResponse,
     AuditEventView,
     DeviceUpdate,
     DeviceView,
@@ -49,10 +50,11 @@ from .services import (
     get_device,
     list_audit_events,
     list_devices,
+    prepare_agent_token_rotation,
     record_heartbeat,
+    request_agent_token_rotation,
     revoke_device,
     revoke_enrollment_token,
-    rotate_agent_token,
     update_device,
 )
 
@@ -105,6 +107,7 @@ OwnerDep = Annotated[Owner, Depends(require_owner)]
 
 
 def require_agent(
+    request: Request,
     db: Db,
     settings: SettingsDep,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
@@ -112,7 +115,9 @@ def require_agent(
     if not credentials or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Agent bearer token required")
     try:
-        return authenticate_agent(db, credentials.credentials, settings)
+        return authenticate_agent(
+            db, credentials.credentials, settings, source_ip=client_ip(request)
+        )
     except AuthenticationError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
@@ -326,7 +331,27 @@ def heartbeat(
         source_ip=client_ip(request),
         now=moment,
     )
-    return HeartbeatResponse(server_time=moment, next_heartbeat_seconds=30)
+    return HeartbeatResponse(
+        server_time=moment,
+        next_heartbeat_seconds=30,
+        credential_rotation_required=device.credential_rotation_requested_at is not None,
+    )
+
+
+@router.post("/agents/rotate-token", response_model=AgentTokenRotationResponse)
+def agent_rotate_token(
+    request: Request,
+    db: Db,
+    settings: SettingsDep,
+    device: AgentDep,
+):
+    raw = prepare_agent_token_rotation(
+        db,
+        device=device,
+        settings=settings,
+        source_ip=client_ip(request),
+    )
+    return AgentTokenRotationResponse(agent_token=raw)
 
 
 @router.get("/devices", response_model=list[DeviceView])
@@ -382,22 +407,21 @@ def revoke(
     return DeviceView(**device_to_view(device, settings))
 
 
-@router.post("/devices/{device_id}/rotate-token")
-def rotate_token(
+@router.post("/devices/{device_id}/rotate-token", response_model=DeviceView)
+def request_token_rotation(
     device_id: str,
     request: Request,
     db: Db,
     settings: SettingsDep,
     owner: OwnerDep,
 ):
-    raw = rotate_agent_token(
+    device = request_agent_token_rotation(
         db,
         device=get_device(db, device_id),
-        settings=settings,
         owner=owner,
         source_ip=client_ip(request),
     )
-    return {"agent_token": raw}
+    return DeviceView(**device_to_view(device, settings))
 
 
 @router.get("/audit", response_model=list[AuditEventView])

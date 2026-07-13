@@ -33,7 +33,13 @@ function Send-Heartbeat {
   $config=Read-AgentConfig
   $headers=@{ Authorization="Bearer $($config.agent_token)" }
   $body=(Get-HeartbeatBody $config.rustdesk_id) | ConvertTo-Json -Depth 6
-  Invoke-RestMethod -Method Post -Uri "$($config.base_url)/api/v1/agents/heartbeat" -Headers $headers -ContentType 'application/json' -Body $body | Out-Null
+  $response=Invoke-RestMethod -Method Post -Uri "$($config.base_url)/api/v1/agents/heartbeat" -Headers $headers -ContentType 'application/json' -Body $body
+  if($response.credential_rotation_required){
+    $rotated=Invoke-RestMethod -Method Post -Uri "$($config.base_url)/api/v1/agents/rotate-token" -Headers $headers -ContentType 'application/json'
+    $config.agent_token=$rotated.agent_token
+    Write-AgentConfig $config
+    Write-AgentLog 'Agent credential rotated automatically'
+  }
 }
 
 if($Mode -eq 'ReplaceToken'){

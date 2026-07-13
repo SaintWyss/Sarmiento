@@ -192,12 +192,21 @@ def enroll(args: argparse.Namespace) -> None:
 
 def heartbeat_once(config_path: Path) -> None:
     config = load_config(config_path)
-    request_json(
+    response = request_json(
         f"{config['base_url']}/api/v1/agents/heartbeat",
         method="POST",
         body=payload(config["rustdesk_id"]),
         token=config["agent_token"],
     )
+    if response.get("credential_rotation_required"):
+        rotated = request_json(
+            f"{config['base_url']}/api/v1/agents/rotate-token",
+            method="POST",
+            token=config["agent_token"],
+        )
+        config["agent_token"] = rotated["agent_token"]
+        save_config(config_path, config)
+        log("Agent credential rotated automatically")
 
 
 def run_loop(config_path: Path) -> None:

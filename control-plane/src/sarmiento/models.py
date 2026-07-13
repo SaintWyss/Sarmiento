@@ -50,6 +50,13 @@ class Device(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    credential_rotation_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    credential_rotation_nonce: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pending_token_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
 
     __table_args__ = (Index("ix_devices_last_seen", "last_seen"),)
 

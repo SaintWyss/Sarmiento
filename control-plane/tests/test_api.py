@@ -128,14 +128,15 @@ def test_csrf_and_device_management(tmp_path):
             f"/api/v1/devices/{device_id}/rotate-token", headers=csrf_headers(client)
         )
         assert rotated.status_code == 200
-        assert rotated.json()["agent_token"].startswith("sat_")
+        assert rotated.json()["credential_rotation_pending"] is True
 
         old_heartbeat = client.post(
             "/api/v1/agents/heartbeat",
             headers={"Authorization": f"Bearer {enrollment['agent_token']}"},
             json={"rustdesk_id": "123456789"},
         )
-        assert old_heartbeat.status_code == 401
+        assert old_heartbeat.status_code == 200
+        assert old_heartbeat.json()["credential_rotation_required"] is True
 
         revoked = client.post(f"/api/v1/devices/{device_id}/revoke", headers=csrf_headers(client))
         assert revoked.status_code == 200
@@ -145,7 +146,7 @@ def test_csrf_and_device_management(tmp_path):
         actions = {event["action"] for event in audit.json()}
         assert "device.enrolled" in actions
         assert "device.updated" in actions
-        assert "device.credential_rotated" in actions
+        assert "device.credential_rotation_requested" in actions
         assert "device.revoked" in actions
 
 
@@ -182,3 +183,73 @@ def test_password_change_invalidates_existing_session(tmp_path):
             json={"username": "santiago", "password": "a-new-password-that-is-long-enough"},
         )
         assert new_login.status_code == 200
+
+
+def test_agent_credential_rotation_is_applied_automatically(tmp_path):
+    with make_client(tmp_path) as client:
+        login(client)
+        enrollment = enroll(client, issue_enrollment(client))
+        device_id = enrollment["device_id"]
+        old_token = enrollment["agent_token"]
+
+        requested = client.post(
+            f"/api/v1/devices/{device_id}/rotate-token",
+            headers=csrf_headers(client),
+        )
+        assert requested.status_code == 200, requested.text
+        assert requested.json()["credential_rotation_pending"] is True
+
+        heartbeat = client.post(
+            "/api/v1/agents/heartbeat",
+            headers={"Authorization": f"Bearer {old_token}"},
+            json={"rustdesk_id": "123456789"},
+        )
+        assert heartbeat.status_code == 200, heartbeat.text
+        assert heartbeat.json()["credential_rotation_required"] is True
+
+        rotated = client.post(
+            "/api/v1/agents/rotate-token",
+            headers={"Authorization": f"Bearer {old_token}"},
+        )
+        assert rotated.status_code == 200, rotated.text
+        new_token = rotated.json()["agent_token"]
+        assert new_token.startswith("sat_")
+        assert new_token != old_token
+
+        repeated = client.post(
+            "/api/v1/agents/rotate-token",
+            headers={"Authorization": f"Bearer {old_token}"},
+        )
+        assert repeated.status_code == 200
+        assert repeated.json()["agent_token"] == new_token
+
+        old_heartbeat = client.post(
+            "/api/v1/agents/heartbeat",
+            headers={"Authorization": f"Bearer {old_token}"},
+            json={"rustdesk_id": "123456789"},
+        )
+        assert old_heartbeat.status_code == 200
+        assert old_heartbeat.json()["credential_rotation_required"] is True
+
+        new_heartbeat = client.post(
+            "/api/v1/agents/heartbeat",
+            headers={"Authorization": f"Bearer {new_token}"},
+            json={"rustdesk_id": "123456789"},
+        )
+        assert new_heartbeat.status_code == 200
+        assert new_heartbeat.json()["credential_rotation_required"] is False
+
+        stale_heartbeat = client.post(
+            "/api/v1/agents/heartbeat",
+            headers={"Authorization": f"Bearer {old_token}"},
+            json={"rustdesk_id": "123456789"},
+        )
+        assert stale_heartbeat.status_code == 401
+
+        device = client.get(f"/api/v1/devices/{device_id}")
+        assert device.json()["credential_rotation_pending"] is False
+
+        actions = {event["action"] for event in client.get("/api/v1/audit").json()}
+        assert "device.credential_rotation_requested" in actions
+        assert "device.credential_rotation_issued" in actions
+        assert "device.credential_rotated" in actions
