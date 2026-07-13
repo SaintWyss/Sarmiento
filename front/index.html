@@ -21,6 +21,7 @@
       <form id="loginForm" class="stack">
         <label>Usuario<input id="username" autocomplete="username" required></label>
         <label>Contraseña<input id="password" type="password" autocomplete="current-password" required></label>
+        <label>Código MFA o recuperación <span class="muted">(si está habilitado)</span><input id="verificationCode" inputmode="numeric" autocomplete="one-time-code"></label>
         <button class="primary" type="submit">Ingresar</button>
         <p id="loginError" class="error" role="alert"></p>
       </form>
@@ -117,8 +118,6 @@
     </form>
   </dialog>
 
-
-
   <dialog id="viewerDialog">
     <form method="dialog" class="dialog-card wide-dialog">
       <button class="dialog-close" value="cancel" aria-label="Cerrar">×</button>
@@ -133,10 +132,42 @@
   </dialog>
 
   <dialog id="passwordDialog">
-    <form method="dialog" class="dialog-card">
+    <form method="dialog" class="dialog-card wide-dialog">
       <button class="dialog-close" value="cancel" aria-label="Cerrar">×</button>
       <p class="eyebrow">SEGURIDAD</p>
-      <h2>Cambiar contraseña</h2>
+      <h2>Cuenta del propietario</h2>
+      <p id="mfaStatus" class="muted"></p>
+
+      <section id="mfaDisabledPanel" class="issued-box hidden">
+        <h3>Activar autenticación en dos pasos</h3>
+        <p class="muted">Usá una aplicación TOTP como Aegis, 2FAS, Google Authenticator o Bitwarden.</p>
+        <button id="mfaSetupButton" type="button" class="secondary">Generar configuración MFA</button>
+        <div id="mfaSetupBox" class="hidden">
+          <label>Clave secreta<input id="mfaSecret" readonly></label>
+          <label>URI de configuración<textarea id="mfaUri" readonly rows="4"></textarea></label>
+          <label>Código de 6 dígitos<input id="mfaEnableCode" inputmode="numeric" autocomplete="one-time-code"></label>
+          <button id="mfaEnableButton" type="button" class="primary">Verificar y activar</button>
+        </div>
+      </section>
+
+      <section id="mfaEnabledPanel" class="issued-box hidden">
+        <h3>Desactivar autenticación en dos pasos</h3>
+        <p class="warning">Esto reduce la protección del panel expuesto a Internet.</p>
+        <label>Contraseña actual<input id="mfaDisablePassword" type="password" autocomplete="current-password"></label>
+        <label>Código MFA o recuperación<input id="mfaDisableCode" autocomplete="one-time-code"></label>
+        <button id="mfaDisableButton" type="button" class="danger">Desactivar MFA</button>
+      </section>
+
+      <section id="recoveryPanel" class="issued-box hidden">
+        <h3>Códigos de recuperación</h3>
+        <p class="warning">Guardalos ahora en un gestor de contraseñas. Cada código funciona una sola vez y no volverán a mostrarse.</p>
+        <pre id="recoveryCodes"></pre>
+        <button id="copyRecoveryButton" type="button" class="secondary">Copiar códigos</button>
+        <button id="finishMfaButton" type="button" class="primary">Terminar y volver a ingresar</button>
+      </section>
+
+      <hr>
+      <h3>Cambiar contraseña</h3>
       <p class="muted">Al guardarla se cerrarán todas las sesiones activas.</p>
       <label>Contraseña actual<input id="currentPassword" type="password" autocomplete="current-password"></label>
       <label>Nueva contraseña<input id="newPassword" type="password" minlength="12" autocomplete="new-password"></label>
