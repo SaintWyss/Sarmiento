@@ -4,7 +4,7 @@ Sarmiento es una plataforma personal de control remoto para administrar tus prop
 
 ## Estado
 
-**Versión 1.1 implementada.** El repositorio contiene backend, panel web/PWA, agentes Linux, Windows y macOS, infraestructura Docker, HTTPS, PostgreSQL, backups, pruebas, escaneo de seguridad y CI.
+**Versión 1.2 implementada.** El repositorio contiene backend, panel web/PWA, agentes Linux, Windows y macOS, infraestructura Docker, HTTPS, PostgreSQL, backups, pruebas, escaneo de seguridad y CI.
 
 La validación automática cubre el control-plane, migraciones, scripts, contenedores y agentes. La aceptación final de captura/control siempre debe ejecutarse con las máquinas reales porque permisos de pantalla, Wayland, firewalls, NAT y el protocolo local `sarmiento://` dependen del sistema operativo.
 
@@ -21,6 +21,7 @@ La validación automática cubre el control-plane, migraciones, scripts, contene
 - Heartbeat cada 30 segundos, estado online/offline e inventario técnico acotado.
 - Panel responsive instalable como PWA.
 - Conexión 1-click mediante `sarmiento://` y copia de ID como fallback.
+- Modo estación Linux desde la interfaz: Deskflow para pantallas físicas o RustDesk dentro del monitor.
 - Administración de alias, etiquetas, revocación y auditoría.
 - Instaladores para Linux/systemd, Windows/Scheduled Tasks y macOS/launchd.
 - HTTPS automático con Caddy y headers CSP/HSTS.
@@ -52,6 +53,7 @@ Documentación técnica:
 - [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md): STRIDE, trust boundaries y escenarios de abuso.
 - [`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md): hallazgos, correcciones y riesgos residuales.
 - [`docs/SECURITY.md`](docs/SECURITY.md): controles y respuesta a incidentes.
+- [`docs/WORKSTATION.md`](docs/WORKSTATION.md): interfaz gráfica, Deskflow y modos de estación en KDE.
 - [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), [`docs/OPERATIONS.md`](docs/OPERATIONS.md) y [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md).
 
 ## Requisitos de despliegue
@@ -128,6 +130,17 @@ Los instaladores:
 3. Abrí Sarmiento o instalalo como PWA.
 4. Pulsá **Conectar**. Si el sistema no abre el deep link, copiá el ID y pegalo en RustDesk.
 
+## Estación de trabajo Linux
+
+En KDE/X11, el panel ofrece dos acciones gráficas sin depender de la terminal:
+
+- **Usar pantallas físicas:** activa el servicio Deskflow local.
+- **Abrir en monitor:** pausa Deskflow y abre el dispositivo elegido mediante RustDesk.
+
+Instalá o actualizá una vez el Viewer desde **Conexión 1-click** para registrar el protocolo y
+el companion local. La configuración, límites y rollback están en
+[`docs/WORKSTATION.md`](docs/WORKSTATION.md).
+
 ## Desarrollo y validación
 
 ```bash
@@ -163,7 +176,7 @@ make backup
 
 ## Versiones fijadas
 
-- Sarmiento control-plane: `1.1.0`.
+- Sarmiento control-plane: `1.2.0`.
 - RustDesk client: `1.4.9` en instaladores.
 - RustDesk server OSS: `1.1.15`.
 - PostgreSQL: `16.4-alpine`.
