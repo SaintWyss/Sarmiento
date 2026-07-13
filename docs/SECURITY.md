@@ -3,26 +3,33 @@
 ## Activos protegidos
 
 - Acceso administrativo al panel.
-- Tokens de enrolamiento.
-- Credenciales de agentes.
+- Secreto TOTP y códigos de recuperación.
+- Tokens de enrolamiento y credenciales de agentes.
 - Identidad privada del servidor RustDesk.
 - Contraseña permanente configurada en cada host.
+- Inventario, IPs y auditoría.
 
 ## Controles
 
-- Contraseñas de propietario derivadas con scrypt y salt aleatorio.
-- Sesiones JWT HS256 en cookie HttpOnly, SameSite=Strict y Secure en producción.
+- Contraseñas del propietario con scrypt y sal aleatoria.
+- MFA TOTP opcional, recomendado en producción, con anti-replay y recovery codes de un uso.
+- Secreto MFA cifrado; recovery codes y tokens persistidos únicamente como HMAC.
+- Lockout persistente de cuenta más rate limit por IP.
+- JWT con emisor, audiencia, expiración, `nbf`, `jti` y versión de sesión obligatorios.
+- Cookies HttpOnly/Secure/SameSite Strict; prefijo `__Host-` bajo HTTPS.
 - Protección CSRF por double-submit cookie.
-- Rate limiting separado para login y API general.
-- Tokens aleatorios de alta entropía.
-- Tokens de enrolamiento de uso único y TTL corto.
-- Credenciales de agentes independientes y revocables.
-- HMAC-SHA-256 con pepper para tokens persistidos.
-- HTTPS y headers de seguridad por Caddy.
-- CSP sin scripts externos ni `unsafe-inline`.
-- API no publicada directamente por Docker.
+- Tokens de enrolamiento de un uso, TTL corto y consumo serializado con lock de fila.
+- Credenciales por agente, revocables y rotación automática tolerante a reintentos.
+- Límite global del body HTTP y límite específico de metadata.
+- HTTPS, CSP, HSTS y headers de seguridad por Caddy.
+- API y PostgreSQL sin puertos publicados por Docker.
 - Clave privada RustDesk fuera del repositorio.
-- Auditoría de login, enrolamiento y cambios administrativos.
+- Auditoría de login, MFA, enrolamiento, rotación y administración.
+- CI, `pip-audit` y Bandit.
+
+## Activar MFA
+
+Abrí **Seguridad → Activar autenticación en dos pasos**. Cargá la clave en una aplicación TOTP, validá un código y guardá los códigos de recuperación en un gestor de contraseñas. Habilitar MFA invalida la sesión actual para obligar a probar el nuevo factor.
 
 ## Lo que Sarmiento no almacena
 
@@ -32,31 +39,18 @@
 - Archivos transferidos.
 - Contenido de portapapeles.
 
-## Rotación
+## Rotación e incidentes
 
-- Propietario: usar **Seguridad → Cambiar contraseña** en el panel. La operación incrementa la versión de sesión e invalida de inmediato todas las sesiones existentes. `SARMIENTO_OWNER_PASSWORD` solo define la contraseña del primer arranque.
-- Sesiones: cambiar `SARMIENTO_SESSION_SECRET`; invalida sesiones existentes.
-- Tokens: cambiar `SARMIENTO_TOKEN_PEPPER` invalida tokens de agentes y enrolamiento, por lo que todos deben volver a enrolarse.
-- Agente individual: usar **Rotar credencial**, copiar el nuevo token y ejecutar el comando de reemplazo en el host.
+- **Contraseña:** cambiarla en el panel invalida todas las sesiones.
+- **Sesiones:** cambiar `SARMIENTO_SESSION_SECRET` invalida todas las sesiones.
+- **Tokens:** cambiar `SARMIENTO_TOKEN_PEPPER` invalida agentes, tokens de enrolamiento y cifrado MFA; requiere re-enrolar y reconfigurar MFA.
+- **Agente individual:** solicitar rotación desde el panel; el agente la completa en el próximo heartbeat sin cortar primero la credencial anterior.
+- **Servidor comprometido:** regenerar identidad RustDesk, session secret, pepper, contraseña del owner y contraseñas permanentes de hosts desde un entorno limpio.
 
-Linux:
+## Confianza en proxy
 
-```bash
-sudo python3 /opt/sarmiento/sarmiento_agent.py replace-token 'sat_...'
-sudo systemctl restart sarmiento-agent
-```
-
-Windows:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "$env:ProgramData\Sarmiento\sarmiento-agent.ps1" -Mode ReplaceToken -NewToken 'sat_...'
-Restart-ScheduledTask -TaskName SarmientoAgent
-```
+El despliegue oficial permite proxy headers porque el API solo es accesible desde Caddy en la red Docker privada. No publiques el puerto 8000. Si cambiás la topología, restringí `SARMIENTO_FORWARDED_ALLOW_IPS` a proxies concretos.
 
 ## Reporte de vulnerabilidades
 
-No publiques credenciales, claves, IP privadas o capturas del panel en un issue público. Revocá primero cualquier secreto expuesto y luego documentá el incidente sin incluir el valor comprometido.
-
-## Rotación de credenciales del agente
-
-El propietario solicita la rotación desde el panel. El agente autenticado recibe la señal en el siguiente heartbeat, intercambia su credencial por una nueva y la persiste localmente con permisos restringidos. La credencial anterior deja de ser válida únicamente después de que el agente recibe y guarda la nueva.
+No publiques credenciales, claves, IP privadas o capturas del panel en un issue público. Revocá primero cualquier secreto expuesto y luego documentá el incidente sin incluir el valor comprometido. Consultá también [`THREAT_MODEL.md`](THREAT_MODEL.md) y [`SECURITY_AUDIT.md`](SECURITY_AUDIT.md).
