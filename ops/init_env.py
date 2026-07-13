@@ -61,16 +61,22 @@ def main() -> int:
         "SARMIENTO_ALLOWED_ORIGINS": site,
         "SARMIENTO_ALLOWED_HOSTS": f"{hostname},localhost,127.0.0.1",
         "SARMIENTO_RUSTDESK_SERVER": args.rustdesk_server,
+        "SARMIENTO_LOGIN_LOCKOUT_ATTEMPTS": "5",
+        "SARMIENTO_LOGIN_LOCKOUT_MINUTES": "15",
+        "SARMIENTO_MAX_REQUEST_BODY_BYTES": "65536",
+        "SARMIENTO_MAX_RATE_LIMIT_BUCKETS": "10000",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        "\n".join(f"{key}={value}" for key, value in values.items()) + "\n"
-    )
+    args.output.write_text("\n".join(f"{key}={value}" for key, value in values.items()) + "\n")
     os.chmod(args.output, 0o600)
     print(f"Created {args.output} with mode 0600")
     if generated_password:
         print("Generated owner password (store it now):")
         print(password)
+    print(
+        "After the owner exists and you changed the password in the panel, "
+        "you may blank SARMIENTO_OWNER_PASSWORD in infra/.env."
+    )
     return 0
 
 
