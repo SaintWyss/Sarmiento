@@ -8,6 +8,7 @@
   <title>Sarmiento</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/workstation.css">
 </head>
 <body>
   <div class="noise" aria-hidden="true"></div>
@@ -52,6 +53,27 @@
     </section>
 
     <section id="stats" class="stats-grid" aria-label="Resumen"></section>
+
+    <section class="panel workstation-panel" aria-labelledby="workstationTitle">
+      <div class="workstation-icon" aria-hidden="true">⌘</div>
+      <div class="workstation-copy">
+        <div class="workstation-heading">
+          <div>
+            <p class="eyebrow">ESTACIÓN DE TRABAJO</p>
+            <h2 id="workstationTitle">PC y notebook, un solo escritorio</h2>
+          </div>
+          <span class="mode-badge"><span class="dot"></span> Integración disponible</span>
+        </div>
+        <p class="muted">Usá Deskflow para cruzar el cursor entre pantallas o abrí un equipo dentro de este monitor con RustDesk.</p>
+        <div class="mode-actions">
+          <a id="normalModeButton" class="secondary mode-action" href="sarmiento://workstation/normal">
+            <span class="mode-action-icon" aria-hidden="true">↔</span>
+            <span><strong>Usar pantallas físicas</strong><small>Activa Deskflow</small></span>
+          </a>
+          <button id="workstationHelpButton" class="ghost mode-help" type="button">¿Cómo funciona?</button>
+        </div>
+      </div>
+    </section>
 
     <section class="panel toolbar-panel">
       <div class="search-wrap">
@@ -128,6 +150,37 @@
       <label>Windows PowerShell<pre id="viewerWindowsCommand"></pre></label>
       <label>macOS<pre id="viewerMacCommand"></pre></label>
       <p class="warning">En Android/iOS configurá RustDesk con el servidor y la clave que muestra Sarmiento; el panel copiará el ID cuando el protocolo local no esté disponible.</p>
+    </form>
+  </dialog>
+
+  <dialog id="workstationDialog">
+    <form method="dialog" class="dialog-card workstation-dialog">
+      <button class="dialog-close" value="cancel" aria-label="Cerrar">×</button>
+      <p class="eyebrow">ABRIR EN ESTE MONITOR</p>
+      <h2 id="workstationDeviceName">Controlar equipo</h2>
+      <p class="muted">Sarmiento pausará Deskflow en esta PC y abrirá una sesión RustDesk. Cuando termines, volvé al modo de pantallas físicas desde el panel.</p>
+      <div class="mode-preview" aria-hidden="true">
+        <div class="preview-screen active">PC</div>
+        <div class="preview-arrow">→</div>
+        <div class="preview-screen" id="workstationPreviewName">Notebook</div>
+      </div>
+      <a id="confirmWorkstationButton" class="primary dialog-action" href="#">Abrir en este monitor</a>
+      <button class="secondary" value="cancel">Cancelar</button>
+      <p class="helper-text">Si no se abre nada, instalá “Conexión 1-click” desde la barra superior.</p>
+    </form>
+  </dialog>
+
+  <dialog id="workstationHelpDialog">
+    <form method="dialog" class="dialog-card wide-dialog">
+      <button class="dialog-close" value="cancel" aria-label="Cerrar">×</button>
+      <p class="eyebrow">DOS MODOS, UNA INTERFAZ</p>
+      <h2>Cómo controla Sarmiento tu estación</h2>
+      <div class="help-mode-grid">
+        <section><strong>↔ Pantallas físicas</strong><p class="muted">Deskflow mantiene cada sistema en su pantalla y comparte mouse, teclado y portapapeles.</p></section>
+        <section><strong>▣ Abrir en monitor</strong><p class="muted">Sarmiento pausa Deskflow y abre el escritorio remoto mediante tu servidor RustDesk.</p></section>
+      </div>
+      <p class="warning">La aplicación local Sarmiento Viewer debe estar instalada para controlar Deskflow y abrir RustDesk desde el navegador.</p>
+      <button class="primary" value="cancel">Entendido</button>
     </form>
   </dialog>
 
