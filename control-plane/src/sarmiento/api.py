@@ -26,6 +26,10 @@ from .schemas import (
     HeartbeatRequest,
     HeartbeatResponse,
     LoginRequest,
+    MfaDisableRequest,
+    MfaEnableRequest,
+    MfaEnableResponse,
+    MfaSetupResponse,
     OwnerView,
     PasswordChangeRequest,
     PublicConfigView,
@@ -42,20 +46,28 @@ from .services import (
     AuthenticationError,
     audit,
     authenticate_agent,
+    begin_mfa_setup,
     change_owner_password,
     create_enrollment_token,
     device_to_view,
+    disable_owner_mfa,
+    enable_owner_mfa,
     enroll_device,
     enrollment_status,
     get_device,
     list_audit_events,
     list_devices,
+    login_lock_remaining,
+    owner_mfa_enabled,
     prepare_agent_token_rotation,
     record_heartbeat,
+    register_login_failure,
+    register_login_success,
     request_agent_token_rotation,
     revoke_device,
     revoke_enrollment_token,
     update_device,
+    verify_owner_second_factor,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -83,7 +95,7 @@ def client_ip(request: Request) -> str | None:
 
 
 def require_owner(request: Request, db: Db, settings: SettingsDep) -> Owner:
-    raw = request.cookies.get("sarmiento_session")
+    raw = request.cookies.get(settings.session_cookie_name)
     if not raw:
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
@@ -96,7 +108,7 @@ def require_owner(request: Request, db: Db, settings: SettingsDep) -> Owner:
     if int(payload.get("session_version", 0)) != owner.session_version:
         raise HTTPException(status_code=401, detail="Session has been invalidated")
     if settings.csrf_enabled and request.method not in {"GET", "HEAD", "OPTIONS"}:
-        cookie_token = request.cookies.get("sarmiento_csrf", "")
+        cookie_token = request.cookies.get(settings.csrf_cookie_name, "")
         header_token = request.headers.get("x-sarmiento-csrf", "")
         if not cookie_token or not hmac.compare_digest(cookie_token, header_token):
             raise HTTPException(status_code=403, detail="CSRF validation failed")
@@ -125,6 +137,19 @@ def require_agent(
 AgentDep = Annotated[Device, Depends(require_agent)]
 
 
+def owner_view(owner: Owner) -> OwnerView:
+    return OwnerView(
+        id=owner.id,
+        username=owner.username,
+        mfa_enabled=owner_mfa_enabled(owner),
+    )
+
+
+def clear_auth_cookies(response: Response, settings: Settings) -> None:
+    response.delete_cookie(settings.session_cookie_name, path="/")
+    response.delete_cookie(settings.csrf_cookie_name, path="/")
+
+
 @router.post("/auth/login", response_model=OwnerView)
 def login(
     payload: LoginRequest,
@@ -136,17 +161,63 @@ def login(
     owner = db.scalar(select(Owner).where(Owner.username == payload.username))
     password_hash = owner.password_hash if owner else DUMMY_PASSWORD_HASH
     password_valid = verify_password(payload.password, password_hash)
+
     if not owner or not password_valid:
+        if owner:
+            register_login_failure(
+                db,
+                owner=owner,
+                settings=settings,
+                source_ip=client_ip(request),
+                reason="credentials",
+            )
+        else:
+            audit(
+                db,
+                actor_type="anonymous",
+                actor_id=None,
+                action="auth.login_failed",
+                source_ip=client_ip(request),
+                details={"username": payload.username, "reason": "credentials"},
+            )
+            db.commit()
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    remaining = login_lock_remaining(owner)
+    if remaining:
         audit(
             db,
             actor_type="anonymous",
             actor_id=None,
-            action="auth.login_failed",
+            action="auth.login_blocked",
+            target_type="owner",
+            target_id=owner.id,
             source_ip=client_ip(request),
-            details={"username": payload.username},
         )
         db.commit()
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        raise HTTPException(
+            status_code=429,
+            detail="Account temporarily locked",
+            headers={"Retry-After": str(remaining)},
+        )
+
+    if not verify_owner_second_factor(
+        db,
+        owner=owner,
+        code=payload.verification_code,
+        settings=settings,
+        source_ip=client_ip(request),
+    ):
+        register_login_failure(
+            db,
+            owner=owner,
+            settings=settings,
+            source_ip=client_ip(request),
+            reason="second_factor",
+        )
+        raise HTTPException(status_code=401, detail="Invalid username, password, or MFA code")
+
+    register_login_success(db, owner=owner, source_ip=client_ip(request))
     token = issue_session_token(
         user_id=owner.id,
         username=owner.username,
@@ -157,7 +228,7 @@ def login(
     csrf = generate_csrf_token()
     max_age = settings.session_ttl_minutes * 60
     response.set_cookie(
-        "sarmiento_session",
+        settings.session_cookie_name,
         token,
         max_age=max_age,
         httponly=True,
@@ -166,7 +237,7 @@ def login(
         path="/",
     )
     response.set_cookie(
-        "sarmiento_csrf",
+        settings.csrf_cookie_name,
         csrf,
         max_age=max_age,
         httponly=False,
@@ -174,19 +245,17 @@ def login(
         samesite="strict",
         path="/",
     )
-    audit(
-        db,
-        actor_type="owner",
-        actor_id=owner.id,
-        action="auth.login_succeeded",
-        source_ip=client_ip(request),
-    )
-    db.commit()
-    return OwnerView(id=owner.id, username=owner.username)
+    return owner_view(owner)
 
 
 @router.post("/auth/logout", status_code=204)
-def logout(request: Request, response: Response, db: Db, owner: OwnerDep):
+def logout(
+    request: Request,
+    response: Response,
+    db: Db,
+    settings: SettingsDep,
+    owner: OwnerDep,
+):
     audit(
         db,
         actor_type="owner",
@@ -195,13 +264,12 @@ def logout(request: Request, response: Response, db: Db, owner: OwnerDep):
         source_ip=client_ip(request),
     )
     db.commit()
-    response.delete_cookie("sarmiento_session", path="/")
-    response.delete_cookie("sarmiento_csrf", path="/")
+    clear_auth_cookies(response, settings)
 
 
 @router.get("/auth/me", response_model=OwnerView)
 def me(owner: OwnerDep):
-    return OwnerView(id=owner.id, username=owner.username)
+    return owner_view(owner)
 
 
 @router.post("/auth/change-password", status_code=204)
@@ -210,6 +278,7 @@ def password_change(
     request: Request,
     response: Response,
     db: Db,
+    settings: SettingsDep,
     owner: OwnerDep,
 ):
     change_owner_password(
@@ -219,8 +288,54 @@ def password_change(
         new_password=payload.new_password,
         source_ip=client_ip(request),
     )
-    response.delete_cookie("sarmiento_session", path="/")
-    response.delete_cookie("sarmiento_csrf", path="/")
+    clear_auth_cookies(response, settings)
+
+
+@router.post("/auth/mfa/setup", response_model=MfaSetupResponse)
+def mfa_setup(owner: OwnerDep):
+    secret, provisioning_uri = begin_mfa_setup(owner)
+    return MfaSetupResponse(secret=secret, provisioning_uri=provisioning_uri)
+
+
+@router.post("/auth/mfa/enable", response_model=MfaEnableResponse)
+def mfa_enable(
+    payload: MfaEnableRequest,
+    request: Request,
+    response: Response,
+    db: Db,
+    settings: SettingsDep,
+    owner: OwnerDep,
+):
+    recovery_codes = enable_owner_mfa(
+        db,
+        owner=owner,
+        secret=payload.secret,
+        code=payload.code,
+        settings=settings,
+        source_ip=client_ip(request),
+    )
+    clear_auth_cookies(response, settings)
+    return MfaEnableResponse(recovery_codes=recovery_codes)
+
+
+@router.post("/auth/mfa/disable", status_code=204)
+def mfa_disable(
+    payload: MfaDisableRequest,
+    request: Request,
+    response: Response,
+    db: Db,
+    settings: SettingsDep,
+    owner: OwnerDep,
+):
+    disable_owner_mfa(
+        db,
+        owner=owner,
+        current_password=payload.current_password,
+        code=payload.code,
+        settings=settings,
+        source_ip=client_ip(request),
+    )
+    clear_auth_cookies(response, settings)
 
 
 @router.get("/config/public", response_model=PublicConfigView)
