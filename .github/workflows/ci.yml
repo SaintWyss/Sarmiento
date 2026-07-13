@@ -42,8 +42,10 @@ jobs:
           node-version: "22"
       - name: Validate shell and frontend JavaScript
         run: |
-          bash -n agent/install-linux.sh agent/install-macos.sh viewer/install-linux.sh viewer/install-macos.sh viewer/sarmiento-open.sh control-plane/entrypoint.sh ops/backup.sh ops/restore.sh ops/smoke.sh
+          bash -n agent/install-linux.sh agent/install-macos.sh viewer/install-linux.sh viewer/install-macos.sh viewer/sarmiento-open.sh viewer/sarmiento-workstation.sh viewer/tests/test-viewer.sh control-plane/entrypoint.sh ops/backup.sh ops/restore.sh ops/smoke.sh
           node --check front/app.js
+          node --check front/sw.js
+          bash viewer/tests/test-viewer.sh
       - name: Validate PowerShell syntax
         shell: pwsh
         run: |
