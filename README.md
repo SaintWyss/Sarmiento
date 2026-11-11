@@ -1,4 +1,16 @@
-# Sarmiento
+<h1 align="center">Sarmiento</h1>
+
+<p align="center"><strong>Tus computadoras, desde un solo lugar.</strong><br/>Control remoto personal · Linux · Windows · macOS</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL" />
+  <img src="https://img.shields.io/badge/Tauri-24C8DB?style=flat-square&logo=tauri&logoColor=black" alt="Tauri" />
+  <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="Licencia MIT" />
+</p>
+
+> Proyecto personal en desarrollo. Las capacidades y su validación dependen del sistema operativo y del entorno de despliegue; consultá [aceptación](docs/ACCEPTANCE.md) y [seguridad](docs/SECURITY.md).
 
 Sarmiento es una plataforma personal de control remoto para administrar tus propias computadoras desde cualquier lugar. Usa **RustDesk OSS** como motor de pantalla, teclado, mouse, audio, transferencia y relay, y agrega un **control-plane propio** para inventario, enrolamiento, presencia, seguridad, auditoría y conexión rápida.
 
