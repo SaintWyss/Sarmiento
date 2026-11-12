@@ -51,3 +51,34 @@ def test_rustdesk_version_timeout_returns_unknown(monkeypatch):
 
     monkeypatch.setattr(agent, "run_rustdesk", timeout)
     assert agent.rustdesk_version() == "unknown"
+
+
+def test_heartbeat_loop_retries_expected_failure(monkeypatch, tmp_path):
+    agent = load_agent_module()
+    monkeypatch.setattr(agent, "load_config", lambda path: {})
+    calls = []
+
+    def heartbeat(path):
+        calls.append(path)
+        if len(calls) == 1:
+            raise RuntimeError("connection failed")
+        raise KeyboardInterrupt
+
+    delays = []
+    monkeypatch.setattr(agent, "heartbeat_once", heartbeat)
+    monkeypatch.setattr(agent.time, "sleep", delays.append)
+    agent.run_loop(tmp_path / "agent.json")
+    assert len(calls) == 2
+    assert delays == [30]
+
+
+def test_heartbeat_loop_does_not_hide_unexpected_exception(monkeypatch, tmp_path):
+    agent = load_agent_module()
+    monkeypatch.setattr(agent, "load_config", lambda path: {})
+
+    def heartbeat(path):
+        raise AssertionError("unexpected bug")
+
+    monkeypatch.setattr(agent, "heartbeat_once", heartbeat)
+    with pytest.raises(AssertionError, match="unexpected bug"):
+        agent.run_loop(tmp_path / "agent.json")
