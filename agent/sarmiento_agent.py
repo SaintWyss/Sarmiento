@@ -114,10 +114,9 @@ def detect_rustdesk_id(explicit: str | None = None) -> str:
 
 def rustdesk_version() -> str:
     try:
-        return (
-            run_rustdesk("--version", required=False).splitlines()[0][:40] or "unknown"
-        )
-    except Exception:
+        lines = run_rustdesk("--version", required=False).splitlines()
+        return lines[0][:40] if lines else "unknown"
+    except (OSError, RuntimeError, subprocess.SubprocessError):
         return "unknown"
 
 
@@ -240,7 +239,7 @@ def run_loop(config_path: Path) -> None:
             time.sleep(interval)
         except KeyboardInterrupt:
             return
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
             failures += 1
             delay = min(300, max(interval, 2 ** min(failures, 8)))
             log(f"Heartbeat failed: {exc}; retrying in {delay}s")
@@ -283,7 +282,7 @@ def main() -> int:
         elif args.command == "replace-token":
             replace_token(args.config, args.token)
         return 0
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
         log(f"ERROR: {exc}")
         return 1
 

@@ -1,4 +1,5 @@
 import importlib.util
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -34,3 +35,19 @@ def test_agent_rejects_unsafe_control_plane_urls(url):
     agent = load_agent_module()
     with pytest.raises(RuntimeError):
         agent.validate_service_url(url)
+
+
+def test_rustdesk_version_empty_output_returns_unknown(monkeypatch):
+    agent = load_agent_module()
+    monkeypatch.setattr(agent, "run_rustdesk", lambda *args, **kwargs: "")
+    assert agent.rustdesk_version() == "unknown"
+
+
+def test_rustdesk_version_timeout_returns_unknown(monkeypatch):
+    agent = load_agent_module()
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired("rustdesk", 30)
+
+    monkeypatch.setattr(agent, "run_rustdesk", timeout)
+    assert agent.rustdesk_version() == "unknown"
