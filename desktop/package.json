@@ -12,12 +12,12 @@
     "desktop:build": "npm run icons && tauri build"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.11.1",
-    "@tauri-apps/plugin-autostart": "2.5.1",
-    "@tauri-apps/plugin-deep-link": "2.4.9"
+    "@tauri-apps/api": "2.12.4",
+    "@tauri-apps/plugin-autostart": "2.7.0",
+    "@tauri-apps/plugin-deep-link": "2.6.3"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.11.4",
+    "@tauri-apps/cli": "2.12.4",
     "esbuild": "0.28.1",
     "typescript": "7.0.2",
     "vite": "8.1.4"

@@ -57,7 +57,7 @@ La base 1.0.1 ya tenía buenas decisiones: separación del plano de datos, no al
 - Alembic es la autoridad del esquema en producción.
 - CI valida pruebas, lint, sintaxis, migraciones, Compose e imagen.
 - Workflow semanal ejecuta `pip-audit` y Bandit y conserva ambos informes como artefactos.
-- `cryptography` se restringe a `>=48.0.1,<49` para evitar wheels enlazados contra la versión vulnerable de OpenSSL detectada por `GHSA-537c-gmf6-5ccf`.
+- La revisión original restringía `cryptography` a `>=48.0.1,<49`. Ese rango se reemplazó por `>=50.0.2,<51` ante los avisos posteriores detectados por `pip-audit`; los hallazgos de esta auditoría son históricos y deben contrastarse con la CI vigente.
 
 ## Riesgos residuales aceptados
 
